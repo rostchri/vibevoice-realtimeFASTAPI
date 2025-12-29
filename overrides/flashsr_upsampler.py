@@ -4,7 +4,6 @@ Provides ultra-fast audio upsampling at 200-400x realtime.
 """
 import os
 import numpy as np
-import torch
 import librosa
 from typing import Optional
 from pathlib import Path
