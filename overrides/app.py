@@ -604,12 +604,18 @@ async def openai_speech(request: OpenAISpeechRequest):
             audio.export(mp3_buffer, format="mp3")
             return Response(content=mp3_buffer.getvalue(), media_type="audio/mpeg")
         elif request.response_format == "opus":
-            buffer.seek(0)
-            audio = AudioSegment.from_wav(buffer)
-            opus_buffer = io.BytesIO()
-            # Export as opus with 48kHz sample rate
-            audio.export(opus_buffer, format="opus", codec="libopus", parameters=["-ar", "48000"])
-            return Response(content=opus_buffer.getvalue(), media_type="audio/opus")
+            try:
+                buffer.seek(0)
+                audio = AudioSegment.from_wav(buffer)
+                opus_buffer = io.BytesIO()
+                # Export as opus using the actual output sample rate
+                audio.export(opus_buffer, format="opus", codec="libopus", 
+                           parameters=["-ar", str(output_sample_rate)])
+                return Response(content=opus_buffer.getvalue(), media_type="audio/opus")
+            except Exception as e:
+                # Fallback to WAV if opus encoding fails (e.g., ffmpeg not available)
+                print(f"[Warning] Opus encoding failed: {e}. Falling back to WAV format.")
+                return Response(content=wav_data, media_type="audio/wav")
         else:  # wav or default
             return Response(content=wav_data, media_type="audio/wav")
 
