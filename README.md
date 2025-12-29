@@ -20,7 +20,9 @@
 
 - **Local & Private**: Runs entirely on your machine (CUDA/MPS/CPU).
 - **Realtime Streaming**: Low-latency text-to-speech generation.
+- **FlashSR Super-Resolution**: Ultra-fast audio upsampling (24kHz → 48kHz) at 200-400x realtime, enabled by default.
 - **OpenAI API Compatible**: Drop-in replacement for OpenAI's TTS API.
+- **Multiple Audio Formats**: Supports Opus (default), WAV, and MP3 output.
 - **Web Interface**: Built-in interactive demo UI.
 - **Multi-Platform**: Optimized for Ubuntu (CUDA) and macOS (Apple Silicon).
 - **Easy Setup**: Powered by `uv` for fast, reliable dependency management.
@@ -61,7 +63,7 @@ This runner provides OpenAI-compatible endpoints for easy integration with exist
 
 **Endpoint**: `POST /v1/audio/speech`
 
-Generates audio from text.
+Generates audio from text with FlashSR super-resolution enabled by default (24kHz → 48kHz).
 
 ```bash
 curl http://127.0.0.1:8000/v1/audio/speech \
@@ -70,9 +72,9 @@ curl http://127.0.0.1:8000/v1/audio/speech \
     "model": "tts-1",
     "input": "Hello, this is VibeVoice running locally!",
     "voice": "en-Carter_man",
-    "response_format": "mp3"
+    "response_format": "opus"
   }' \
-  --output speech.mp3
+  --output speech.opus
 ```
 
 | Parameter | Type | Description |
@@ -80,7 +82,7 @@ curl http://127.0.0.1:8000/v1/audio/speech \
 | `model` | `string` | Model identifier (e.g., `tts-1`). Ignored but required for compatibility. |
 | `input` | `string` | The text to generate audio for. |
 | `voice` | `string` | The voice ID to use (see `/v1/audio/voices`). |
-| `response_format` | `string` | Output format: `wav` (default) or `mp3`. |
+| `response_format` | `string` | Output format: `opus` (default, 48kHz), `wav`, or `mp3`. |
 | `speed` | `float` | Speed of generation (currently ignored). |
 
 ### 🎤 List Voices
@@ -136,6 +138,28 @@ uv run python scripts/run_realtime_demo.py --inference-steps 15
 ```bash
 uv run python scripts/run_realtime_demo.py --model-path /path/to/model
 ```
+
+### FlashSR Audio Super-Resolution
+
+FlashSR is **enabled by default** to upsample audio from 24kHz to 48kHz at 200-400x realtime speed. This provides higher quality audio output with minimal performance impact.
+
+To disable FlashSR (output will be 24kHz):
+```bash
+export ENABLE_FLASHSR=false
+uv run python scripts/run_realtime_demo.py
+```
+
+Or enable it explicitly:
+```bash
+export ENABLE_FLASHSR=true
+uv run python scripts/run_realtime_demo.py
+```
+
+**Benefits of FlashSR:**
+- Ultra-fast processing (200-400x realtime)
+- Higher quality 48kHz audio output
+- Lightweight model (~2MB)
+- Compatible with Opus format for optimal compression
 
 ## 🎧 Demos
 

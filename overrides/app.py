@@ -20,6 +20,7 @@ from starlette.websockets import WebSocketDisconnect, WebSocketState
 from pydantic import BaseModel
 from pydub import AudioSegment
 from .text_processing import normalize_text, split_text_into_sentences
+from .flashsr_upsampler import FlashSRUpsampler
 
 from vibevoice.modular.modeling_vibevoice_streaming_inference import (
     VibeVoiceStreamingForConditionalGenerationInference,
@@ -33,6 +34,7 @@ import copy
 
 BASE = Path(__file__).parent
 SAMPLE_RATE = 24_000
+UPSAMPLED_RATE = 48_000
 
 
 def get_timestamp():
@@ -49,17 +51,20 @@ class StreamingTTSService:
         model_path: str,
         device: str = "cuda",
         inference_steps: int = 15,
+        enable_flashsr: bool = True,
     ) -> None:
         # Keep model_path as string for HuggingFace repo IDs (Path() converts / to \ on Windows)
         self.model_path = model_path
         self.inference_steps = inference_steps
         self.sample_rate = SAMPLE_RATE
+        self.enable_flashsr = enable_flashsr
 
         self.processor: Optional[VibeVoiceStreamingProcessor] = None
         self.model: Optional[VibeVoiceStreamingForConditionalGenerationInference] = None
         self.voice_presets: Dict[str, Path] = {}
         self.default_voice_key: Optional[str] = None
         self._voice_cache: Dict[str, Tuple[object, Path, str]] = {}
+        self.flashsr: Optional[FlashSRUpsampler] = None
 
         if device == "mpx":
             print("Note: device 'mpx' detected, treating it as 'mps'.")
@@ -127,6 +132,15 @@ class StreamingTTSService:
         preset_name = os.environ.get("VOICE_PRESET")
         self.default_voice_key = self._determine_voice_key(preset_name)
         self._ensure_voice_cached(self.default_voice_key)
+        
+        # Initialize FlashSR upsampler
+        if self.enable_flashsr:
+            print("[startup] Initializing FlashSR upsampler for 24kHz -> 48kHz super-resolution")
+            self.flashsr = FlashSRUpsampler(device=self.device, enable=True)
+            self.flashsr.load()
+        else:
+            print("[startup] FlashSR disabled, audio will remain at 24kHz")
+            self.flashsr = FlashSRUpsampler(device=self.device, enable=False)
 
     def _load_voice_presets(self) -> Dict[str, Path]:
         voices_dir = BASE.parent / "voices" / "streaming_model"
@@ -332,6 +346,10 @@ class StreamingTTSService:
                     if peak > 1.0:
                         audio_chunk = audio_chunk / peak
 
+                    # Apply FlashSR upsampling if enabled
+                    if self.flashsr and self.flashsr.enabled:
+                        audio_chunk = self.flashsr.upsample_chunks(audio_chunk, sample_rate=self.sample_rate)
+
                     chunk_to_yield = audio_chunk.astype(np.float32, copy=False)
                     yield chunk_to_yield
             
@@ -348,6 +366,12 @@ class StreamingTTSService:
                     # For now, let's log and maybe continue? Or stop?
                     # The original code raised logic, let's stop.
                     raise errors[0]
+
+    def get_output_sample_rate(self) -> int:
+        """Get the actual output sample rate (48kHz if FlashSR enabled, otherwise 24kHz)."""
+        if self.flashsr and self.flashsr.enabled:
+            return UPSAMPLED_RATE
+        return self.sample_rate
 
     def chunk_to_pcm16(self, chunk: np.ndarray) -> bytes:
         chunk = np.clip(chunk, -1.0, 1.0)
@@ -367,10 +391,16 @@ async def _startup() -> None:
     device = os.environ.get("MODEL_DEVICE", "cuda")
     
     inference_steps = int(os.environ.get("INFERENCE_STEPS", "15"))
+    
+    # FlashSR enabled by default
+    enable_flashsr_str = os.environ.get("ENABLE_FLASHSR", "true").lower()
+    enable_flashsr = enable_flashsr_str in ("true", "1", "yes", "on")
+    
     service = StreamingTTSService(
         model_path=model_path,
         device=device,
-        inference_steps=inference_steps
+        inference_steps=inference_steps,
+        enable_flashsr=enable_flashsr
     )
     service.load()
 
@@ -520,7 +550,7 @@ class OpenAISpeechRequest(BaseModel):
     model: str = "tts-1"
     input: str
     voice: Optional[str] = None
-    response_format: Optional[str] = "wav"
+    response_format: Optional[str] = "opus"  # Default to opus
     speed: Optional[float] = 1.0
 
 
@@ -558,19 +588,30 @@ async def openai_speech(request: OpenAISpeechRequest):
             
         full_audio = np.concatenate(chunks)
         
-        # Convert to WAV
+        # Get the actual output sample rate (48kHz if FlashSR enabled, 24kHz otherwise)
+        output_sample_rate = service.get_output_sample_rate()
+        
+        # Convert to WAV first
         buffer = io.BytesIO()
-        scipy.io.wavfile.write(buffer, service.sample_rate, full_audio)
+        scipy.io.wavfile.write(buffer, output_sample_rate, full_audio)
         wav_data = buffer.getvalue()
         
+        # Convert to requested format
         if request.response_format == "mp3":
             buffer.seek(0)
             audio = AudioSegment.from_wav(buffer)
             mp3_buffer = io.BytesIO()
             audio.export(mp3_buffer, format="mp3")
             return Response(content=mp3_buffer.getvalue(), media_type="audio/mpeg")
-        
-        return Response(content=wav_data, media_type="audio/wav")
+        elif request.response_format == "opus":
+            buffer.seek(0)
+            audio = AudioSegment.from_wav(buffer)
+            opus_buffer = io.BytesIO()
+            # Export as opus with 48kHz sample rate
+            audio.export(opus_buffer, format="opus", codec="libopus", parameters=["-ar", "48000"])
+            return Response(content=opus_buffer.getvalue(), media_type="audio/opus")
+        else:  # wav or default
+            return Response(content=wav_data, media_type="audio/wav")
 
 
 @app.get("/v1/audio/voices")
