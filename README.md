@@ -20,7 +20,7 @@
 
 - **Local & Private**: Runs entirely on your machine (CUDA/MPS/CPU).
 - **Realtime Streaming**: Low-latency text-to-speech generation.
-- **FlashSR Super-Resolution**: Ultra-fast audio upsampling (24kHz → 48kHz) at 200-400x realtime, enabled by default.
+- **LavaSR Super-Resolution**: Neural audio upsampling (24kHz → 48kHz) at 300-500x realtime, enabled by default. Surpasses 6GB diffusion models in quality.
 - **OpenAI API Compatible**: Drop-in replacement for OpenAI's TTS API.
 - **Multiple Audio Formats**: Supports Opus (default), WAV, and MP3 output.
 - **Web Interface**: Built-in interactive demo UI.
@@ -63,7 +63,7 @@ This runner provides OpenAI-compatible endpoints for easy integration with exist
 
 **Endpoint**: `POST /v1/audio/speech`
 
-Generates audio from text with FlashSR super-resolution enabled by default (24kHz → 48kHz).
+Generates audio from text with LavaSR super-resolution enabled by default (24kHz → 48kHz).
 
 ```bash
 curl http://127.0.0.1:8000/v1/audio/speech \
@@ -139,27 +139,37 @@ uv run python scripts/run_realtime_demo.py --inference-steps 15
 uv run python scripts/run_realtime_demo.py --model-path /path/to/model
 ```
 
-### FlashSR Audio Super-Resolution
+### LavaSR Audio Super-Resolution
 
-FlashSR is **enabled by default** to upsample audio from 24kHz to 48kHz at 200-400x realtime speed. This provides higher quality audio output with minimal performance impact.
+LavaSR is **enabled by default** to upsample audio from 24kHz to 48kHz using neural network bandwidth extension. This provides studio-quality 48kHz audio output with minimal performance impact (~2ms per chunk).
 
-To disable FlashSR (output will be 24kHz):
+To disable LavaSR (output will be 24kHz):
 ```bash
-export ENABLE_FLASHSR=false
+export ENABLE_LAVASR=false
 uv run python scripts/run_realtime_demo.py
 ```
 
 Or enable it explicitly:
 ```bash
-export ENABLE_FLASHSR=true
+export ENABLE_LAVASR=true
 uv run python scripts/run_realtime_demo.py
 ```
 
-**Benefits of FlashSR:**
-- Ultra-fast processing (200-400x realtime)
+**Benefits of LavaSR:**
+- Neural network super-resolution (not simple interpolation)
+- 300-500x realtime speed (~2ms latency per chunk)
 - Higher quality 48kHz audio output
-- Lightweight model (~2MB)
+- Direct 24kHz → 48kHz upsampling (no quality loss)
+- Quality surpasses 6GB diffusion models (best LSD scores)
 - Compatible with Opus format for optimal compression
+
+**Benchmark Results (RTX 3090):**
+| Chunk Duration | Upsampling Time | Speed |
+|----------------|-----------------|-------|
+| 0.25s | 1.9ms | 128x realtime |
+| 0.50s | 1.9ms | 263x realtime |
+| 1.00s | 1.9ms | 523x realtime |
+| 2.00s | 2.1ms | 961x realtime |
 
 ## 🎧 Demos
 
@@ -204,6 +214,7 @@ All examples generated using **15 inference steps** with text in the voice's nat
 This project stands on the shoulders of giants. Huge thanks to:
 
 - **[Microsoft](https://github.com/microsoft/VibeVoice)**: For releasing the incredible **VibeVoice** model and the original codebase.
+- **[ysharma3501/LavaSR](https://github.com/ysharma3501/LavaSR)**: For the high-quality neural audio super-resolution model.
 - **[groxaxo](https://github.com/groxaxo)**: For the original repository and initial setup.
 - **[Kokoro FastAPI Creators](https://github.com/remsky/Kokoro-FastAPI)**: For inspiration on the FastAPI implementation and structure.
 - **Open Source Community**: For all the tools and libraries that make this possible.

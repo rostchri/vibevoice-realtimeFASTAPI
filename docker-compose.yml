@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  vibevoice:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./models:/app/models
+    environment:
+      - ENABLE_FLASHSR=true
+      - HF_TOKEN=${HF_TOKEN:-}
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

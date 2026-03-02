@@ -14,8 +14,11 @@ dependencies = [
     # Ensure uv manages VibeVoice + its dependency set (prevents uv from \"undoing\" the env).
     "inflect>=7.5.0",
     "vibevoice",
-    # Audio processing for super-resolution
+    # Audio processing
     "librosa>=0.10.0",
+    # LavaSR super-resolution dependencies
+    "vocos>=0.1.0",
+    "einops>=0.8.0",
 ]
 
 [tool.setuptools]

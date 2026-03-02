@@ -20,7 +20,7 @@ from starlette.websockets import WebSocketDisconnect, WebSocketState
 from pydantic import BaseModel
 from pydub import AudioSegment
 from .text_processing import normalize_text, split_text_into_sentences
-from .flashsr_upsampler import FlashSRUpsampler
+from .lavasr_upsampler import LavaSRUpsampler
 
 from vibevoice.modular.modeling_vibevoice_streaming_inference import (
     VibeVoiceStreamingForConditionalGenerationInference,
@@ -38,12 +38,14 @@ UPSAMPLED_RATE = 48_000
 
 
 def get_timestamp():
-    timestamp = datetime.datetime.utcnow().replace(
-        tzinfo=datetime.timezone.utc
-    ).astimezone(
-        datetime.timezone(datetime.timedelta(hours=8))
-    ).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    timestamp = (
+        datetime.datetime.utcnow()
+        .replace(tzinfo=datetime.timezone.utc)
+        .astimezone(datetime.timezone(datetime.timedelta(hours=8)))
+        .strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    )
     return timestamp
+
 
 class StreamingTTSService:
     def __init__(
@@ -64,11 +66,14 @@ class StreamingTTSService:
         self.voice_presets: Dict[str, Path] = {}
         self.default_voice_key: Optional[str] = None
         self._voice_cache: Dict[str, Tuple[object, Path, str]] = {}
-        self.flashsr: Optional[FlashSRUpsampler] = None
+        self.flashsr: Optional[LavaSRUpsampler] = None
+
+        self._compute_stream: Optional[torch.cuda.Stream] = None
+        self._transfer_stream: Optional[torch.cuda.Stream] = None
 
         if device == "mpx":
             print("Note: device 'mpx' detected, treating it as 'mps'.")
-            device = "mps"        
+            device = "mps"
         if device == "mps" and not torch.backends.mps.is_available():
             print("Warning: MPS not available. Falling back to CPU.")
             device = "cpu"
@@ -76,10 +81,19 @@ class StreamingTTSService:
         self._torch_device = torch.device(device)
 
     def load(self) -> None:
+        if self.device == "cuda":
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+            torch.backends.cudnn.benchmark = True
+            self._compute_stream = torch.cuda.Stream()
+            self._transfer_stream = torch.cuda.Stream()
+            print(
+                "[startup] CUDA optimizations enabled (TF32, cudnn benchmark, streams)"
+            )
+
         print(f"[startup] Loading processor from {self.model_path}")
         self.processor = VibeVoiceStreamingProcessor.from_pretrained(self.model_path)
 
-        
         # Decide dtype & attention
         if self.device == "mps":
             load_dtype = torch.float32
@@ -87,33 +101,41 @@ class StreamingTTSService:
             attn_impl_primary = "sdpa"
         elif self.device == "cuda":
             load_dtype = torch.bfloat16
-            device_map = 'cuda'
+            device_map = "cuda"
             attn_impl_primary = "flash_attention_2"
         else:
             load_dtype = torch.float32
-            device_map = 'cpu'
+            device_map = "cpu"
             attn_impl_primary = "sdpa"
-        print(f"Using device: {device_map}, torch_dtype: {load_dtype}, attn_implementation: {attn_impl_primary}")
+        print(
+            f"Using device: {device_map}, torch_dtype: {load_dtype}, attn_implementation: {attn_impl_primary}"
+        )
         # Load model
         try:
-            self.model = VibeVoiceStreamingForConditionalGenerationInference.from_pretrained(
-                self.model_path,
-                torch_dtype=load_dtype,
-                device_map=device_map,
-                attn_implementation=attn_impl_primary,
+            self.model = (
+                VibeVoiceStreamingForConditionalGenerationInference.from_pretrained(
+                    self.model_path,
+                    torch_dtype=load_dtype,
+                    device_map=device_map,
+                    attn_implementation=attn_impl_primary,
+                )
             )
-            
+
             if self.device == "mps":
                 self.model.to("mps")
         except Exception as e:
-            if attn_impl_primary == 'flash_attention_2':
-                print("Error loading the model. Trying to use SDPA. However, note that only flash_attention_2 has been fully tested, and using SDPA may result in lower audio quality.")
-                
-                self.model = VibeVoiceStreamingForConditionalGenerationInference.from_pretrained(
-                    self.model_path,
-                    torch_dtype=load_dtype,
-                    device_map=self.device,
-                    attn_implementation='sdpa',
+            if attn_impl_primary == "flash_attention_2":
+                print(
+                    "Error loading the model. Trying to use SDPA. However, note that only flash_attention_2 has been fully tested, and using SDPA may result in lower audio quality."
+                )
+
+                self.model = (
+                    VibeVoiceStreamingForConditionalGenerationInference.from_pretrained(
+                        self.model_path,
+                        torch_dtype=load_dtype,
+                        device_map=self.device,
+                        attn_implementation="sdpa",
+                    )
                 )
                 print("Load model with SDPA successfully ")
             else:
@@ -128,19 +150,37 @@ class StreamingTTSService:
         )
         self.model.set_ddpm_inference_steps(num_steps=self.inference_steps)
 
+        if self.device == "cuda" and hasattr(torch, "compile"):
+            print(
+                "[startup] Compiling model with torch.compile(mode='reduce-overhead')..."
+            )
+            # Using fullgraph=False to allow for dynamic splitting logic compatibility
+            # and reduce-overhead to leverage CUDA graphs
+            try:
+                self.model = torch.compile(
+                    self.model, mode="reduce-overhead", fullgraph=False
+                )
+                print("[startup] Model compiled successfully")
+            except Exception as e:
+                print(
+                    f"[startup] torch.compile failed: {e}, falling back to eager mode"
+                )
+
         self.voice_presets = self._load_voice_presets()
         preset_name = os.environ.get("VOICE_PRESET")
         self.default_voice_key = self._determine_voice_key(preset_name)
         self._ensure_voice_cached(self.default_voice_key)
-        
+
         # Initialize FlashSR upsampler
         if self.enable_flashsr:
-            print("[startup] Initializing FlashSR upsampler for 24kHz -> 48kHz super-resolution")
-            self.flashsr = FlashSRUpsampler(device=self.device, enable=True)
+            print(
+                "[startup] Initializing LavaSR upsampler for 24kHz -> 48kHz super-resolution"
+            )
+            self.flashsr = LavaSRUpsampler(device=self.device, enable=True)
             self.flashsr.load()
         else:
-            print("[startup] FlashSR disabled, audio will remain at 24kHz")
-            self.flashsr = FlashSRUpsampler(device=self.device, enable=False)
+            print("[startup] LavaSR disabled, audio will remain at 24kHz")
+            self.flashsr = LavaSRUpsampler(device=self.device, enable=False)
 
     def _load_voice_presets(self) -> Dict[str, Path]:
         voices_dir = BASE.parent / "voices" / "streaming_model"
@@ -186,8 +226,14 @@ class StreamingTTSService:
 
         return self._voice_cache[key]
 
-    def _get_voice_resources(self, requested_key: Optional[str]) -> Tuple[str, object, Path, str]:
-        key = requested_key if requested_key and requested_key in self.voice_presets else self.default_voice_key
+    def _get_voice_resources(
+        self, requested_key: Optional[str]
+    ) -> Tuple[str, object, Path, str]:
+        key = (
+            requested_key
+            if requested_key and requested_key in self.voice_presets
+            else self.default_voice_key
+        )
         if key is None:
             key = next(iter(self.voice_presets))
             self.default_voice_key = key
@@ -229,22 +275,41 @@ class StreamingTTSService:
         stop_event: threading.Event,
     ) -> None:
         try:
-            self.model.generate(
-                **inputs,
-                max_new_tokens=None,
-                cfg_scale=cfg_scale,
-                tokenizer=self.processor.tokenizer,
-                generation_config={
-                    "do_sample": do_sample,
-                    "temperature": temperature if do_sample else 1.0,
-                    "top_p": top_p if do_sample else 1.0,
-                },
-                audio_streamer=audio_streamer,
-                stop_check_fn=stop_event.is_set,
-                verbose=False,
-                refresh_negative=refresh_negative,
-                all_prefilled_outputs=copy.deepcopy(prefilled_outputs),
-            )
+            if self._compute_stream:
+                with torch.cuda.stream(self._compute_stream):
+                    self.model.generate(
+                        **inputs,
+                        max_new_tokens=None,
+                        cfg_scale=cfg_scale,
+                        tokenizer=self.processor.tokenizer,
+                        generation_config={
+                            "do_sample": do_sample,
+                            "temperature": temperature if do_sample else 1.0,
+                            "top_p": top_p if do_sample else 1.0,
+                        },
+                        audio_streamer=audio_streamer,
+                        stop_check_fn=stop_event.is_set,
+                        verbose=False,
+                        refresh_negative=refresh_negative,
+                        all_prefilled_outputs=copy.deepcopy(prefilled_outputs),
+                    )
+            else:
+                self.model.generate(
+                    **inputs,
+                    max_new_tokens=None,
+                    cfg_scale=cfg_scale,
+                    tokenizer=self.processor.tokenizer,
+                    generation_config={
+                        "do_sample": do_sample,
+                        "temperature": temperature if do_sample else 1.0,
+                        "top_p": top_p if do_sample else 1.0,
+                    },
+                    audio_streamer=audio_streamer,
+                    stop_check_fn=stop_event.is_set,
+                    verbose=False,
+                    refresh_negative=refresh_negative,
+                    all_prefilled_outputs=copy.deepcopy(prefilled_outputs),
+                )
         except Exception as exc:  # pragma: no cover - diagnostic logging
             errors.append(exc)
             traceback.print_exc()
@@ -290,7 +355,7 @@ class StreamingTTSService:
                     steps_to_use = parsed_steps
             except (TypeError, ValueError):
                 pass
-        
+
         if self.model:
             self.model.set_ddpm_inference_steps(num_steps=steps_to_use)
         self.inference_steps = steps_to_use
@@ -304,11 +369,11 @@ class StreamingTTSService:
                 break
 
             print(f"[Streaming] Processing sentence: {sentence[:50]}...")
-            
+
             inputs = self._prepare_inputs(sentence, prefilled_outputs)
             audio_streamer = AudioStreamer(batch_size=1, stop_signal=None, timeout=None)
             errors: list = []
-            
+
             # Create a dedicated worker logic for this sentence
             def _worker():
                 self._run_generation(
@@ -335,7 +400,19 @@ class StreamingTTSService:
                         break
 
                     if torch.is_tensor(audio_chunk):
-                        audio_chunk = audio_chunk.detach().cpu().to(torch.float32).numpy()
+                        if self._transfer_stream:
+                            with torch.cuda.stream(self._transfer_stream):
+                                # Async transfer to CPU
+                                audio_chunk = audio_chunk.detach().to(
+                                    torch.float32, non_blocking=True
+                                )
+                            # Wait only for this transfer to finish before numpy conversion
+                            self._transfer_stream.synchronize()
+                            audio_chunk = audio_chunk.cpu().numpy()
+                        else:
+                            audio_chunk = (
+                                audio_chunk.detach().cpu().to(torch.float32).numpy()
+                            )
                     else:
                         audio_chunk = np.asarray(audio_chunk, dtype=np.float32)
 
@@ -346,13 +423,15 @@ class StreamingTTSService:
                     if peak > 1.0:
                         audio_chunk = audio_chunk / peak
 
-                    # Apply FlashSR upsampling if enabled
+                    # Apply LavaSR upsampling if enabled
                     if self.flashsr and self.flashsr.enabled:
-                        audio_chunk = self.flashsr.upsample_chunks(audio_chunk, sample_rate=self.sample_rate)
+                        audio_chunk = self.flashsr.upsample_chunks(
+                            audio_chunk, sample_rate=self.sample_rate
+                        )
 
                     chunk_to_yield = audio_chunk.astype(np.float32, copy=False)
                     yield chunk_to_yield
-            
+
             except Exception as e:
                 emit("generation_error", message=str(e))
                 errors.append(e)
@@ -360,7 +439,7 @@ class StreamingTTSService:
                 # Ensure this sentence's stream is closed
                 audio_streamer.end()
                 thread.join()
-                
+
                 if errors:
                     # Decide if we want to stop strictly on error or continue to next sentence
                     # For now, let's log and maybe continue? Or stop?
@@ -368,7 +447,7 @@ class StreamingTTSService:
                     raise errors[0]
 
     def get_output_sample_rate(self) -> int:
-        """Get the actual output sample rate (48kHz if FlashSR enabled, otherwise 24kHz)."""
+        """Get the actual output sample rate (48kHz if LavaSR enabled, otherwise 24kHz)."""
         if self.flashsr and self.flashsr.enabled:
             return UPSAMPLED_RATE
         return self.sample_rate
@@ -389,18 +468,20 @@ async def _startup() -> None:
         raise RuntimeError("MODEL_PATH not set in environment")
 
     device = os.environ.get("MODEL_DEVICE", "cuda")
-    
+
     inference_steps = int(os.environ.get("INFERENCE_STEPS", "15"))
-    
-    # FlashSR enabled by default
-    enable_flashsr_str = os.environ.get("ENABLE_FLASHSR", "true").lower()
+
+    # LavaSR enabled by default
+    enable_flashsr_str = os.environ.get(
+        "ENABLE_LAVASR", os.environ.get("ENABLE_FLASHSR", "true")
+    ).lower()
     enable_flashsr = enable_flashsr_str in ("true", "1", "yes", "on")
-    
+
     service = StreamingTTSService(
         model_path=model_path,
         device=device,
         inference_steps=inference_steps,
-        enable_flashsr=enable_flashsr
+        enable_flashsr=enable_flashsr,
     )
     service.load()
 
@@ -414,6 +495,7 @@ async def _startup() -> None:
 def streaming_tts(text: str, **kwargs) -> Iterator[np.ndarray]:
     service: StreamingTTSService = app.state.tts_service
     yield from service.stream(text, **kwargs)
+
 
 @app.websocket("/stream")
 async def websocket_stream(ws: WebSocket) -> None:
@@ -558,20 +640,18 @@ class OpenAISpeechRequest(BaseModel):
 async def openai_speech(request: OpenAISpeechRequest):
     service: StreamingTTSService = app.state.tts_service
     lock: asyncio.Lock = app.state.websocket_lock
-    
+
     async with lock:
         # Determine voice
         voice_key = request.voice
-        
+
         # Collect audio
         stop_event = threading.Event()
-        
+
         def generate_all():
             chunks = []
             iterator = service.stream(
-                request.input,
-                voice_key=voice_key,
-                stop_event=stop_event
+                request.input, voice_key=voice_key, stop_event=stop_event
             )
             for chunk in iterator:
                 chunks.append(chunk)
@@ -582,20 +662,20 @@ async def openai_speech(request: OpenAISpeechRequest):
         except Exception as e:
             traceback.print_exc()
             return Response(status_code=500, content=str(e))
-        
+
         if not chunks:
             return Response(status_code=500, content="No audio generated")
-            
+
         full_audio = np.concatenate(chunks)
-        
+
         # Get the actual output sample rate (48kHz if FlashSR enabled, 24kHz otherwise)
         output_sample_rate = service.get_output_sample_rate()
-        
+
         # Convert to WAV first
         buffer = io.BytesIO()
         scipy.io.wavfile.write(buffer, output_sample_rate, full_audio)
         wav_data = buffer.getvalue()
-        
+
         # Convert to requested format
         if request.response_format == "mp3":
             buffer.seek(0)
@@ -609,12 +689,18 @@ async def openai_speech(request: OpenAISpeechRequest):
                 audio = AudioSegment.from_wav(buffer)
                 opus_buffer = io.BytesIO()
                 # Export as opus using the actual output sample rate
-                audio.export(opus_buffer, format="opus", codec="libopus", 
-                           parameters=["-ar", str(output_sample_rate)])
+                audio.export(
+                    opus_buffer,
+                    format="opus",
+                    codec="libopus",
+                    parameters=["-ar", str(output_sample_rate)],
+                )
                 return Response(content=opus_buffer.getvalue(), media_type="audio/opus")
             except Exception as e:
                 # Fallback to WAV if opus encoding fails (e.g., ffmpeg not available)
-                print(f"[Warning] Opus encoding failed: {e}. Falling back to WAV format.")
+                print(
+                    f"[Warning] Opus encoding failed: {e}. Falling back to WAV format."
+                )
                 return Response(content=wav_data, media_type="audio/wav")
         else:  # wav or default
             return Response(content=wav_data, media_type="audio/wav")
@@ -625,13 +711,15 @@ def get_voices():
     service: StreamingTTSService = app.state.tts_service
     voices = []
     for voice_id in sorted(service.voice_presets.keys()):
-        voices.append({
-            "id": voice_id,
-            "name": voice_id,
-            "object": "voice",
-            "created": int(datetime.datetime.now().timestamp()),
-            "category": "vibe_voice"
-        })
+        voices.append(
+            {
+                "id": voice_id,
+                "name": voice_id,
+                "object": "voice",
+                "created": int(datetime.datetime.now().timestamp()),
+                "category": "vibe_voice",
+            }
+        )
     return {"voices": voices}
 
 
@@ -648,4 +736,3 @@ def get_config():
         "voices": voices,
         "default_voice": service.default_voice_key,
     }
-

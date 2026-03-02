@@ -15,3 +15,12 @@ models/
 # Cloned third-party repositories
 third_party/
 uv.lock
+
+# Test audio files
+*.wav
+*.mp3
+*.opus
+
+# Benchmark files for deprecated upsamplers
+benchmark_novasr.py
+test_novasr.py
