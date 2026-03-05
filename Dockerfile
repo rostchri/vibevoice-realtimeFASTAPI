@@ -37,6 +37,9 @@ RUN . .venv/bin/activate && uv sync
 RUN if [ -f "overrides/app.py" ]; then \
         cp overrides/app.py third_party/VibeVoice/demo/web/app.py; \
     fi
+RUN if [ -f "overrides/index.html" ]; then \
+        cp overrides/index.html third_party/VibeVoice/demo/web/index.html; \
+    fi
 
 EXPOSE 8000
 

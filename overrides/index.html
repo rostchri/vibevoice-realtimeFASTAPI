@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VibeVoice Realtime Demo</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 0;
+        padding: 24px;
+        background: #f4f7fb;
+      }
+      .card {
+        max-width: 900px;
+        margin: 0 auto;
+        background: #fff;
+        border-radius: 8px;
+        padding: 20px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+      }
+      h1 {
+        margin-top: 0;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 12px;
+      }
+      label {
+        display: block;
+        font-size: 14px;
+        margin-bottom: 6px;
+        font-weight: 600;
+      }
+      input,
+      select,
+      textarea,
+      button {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 8px;
+      }
+      textarea {
+        min-height: 120px;
+        resize: vertical;
+      }
+      .actions {
+        margin-top: 16px;
+        display: flex;
+        gap: 10px;
+      }
+      #status {
+        margin-top: 12px;
+        font-size: 14px;
+      }
+      audio {
+        margin-top: 12px;
+        width: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <h1>VibeVoice Realtime Demo</h1>
+
+      <label for="inputText">Input Text</label>
+      <textarea id="inputText" placeholder="Enter text to synthesize"></textarea>
+
+      <div class="grid">
+        <div>
+          <label for="modelSelect">Model</label>
+          <select id="modelSelect">
+            <option value="tts-1">tts-1</option>
+            <option value="tts-1-hd">tts-1-hd</option>
+          </select>
+        </div>
+        <div>
+          <label for="voiceSelect">Voice</label>
+          <select id="voiceSelect"></select>
+        </div>
+        <div>
+          <label for="tempInput">Temperature (temp)</label>
+          <input id="tempInput" type="number" min="0.1" max="2.0" step="0.1" value="0.9" />
+        </div>
+        <div>
+          <label for="formatSelect">Response Format</label>
+          <select id="formatSelect">
+            <option value="opus">opus</option>
+            <option value="wav">wav</option>
+            <option value="mp3">mp3</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="generateBtn" type="button">Generate Audio</button>
+        <button id="downloadBtn" type="button" disabled>Download Audio</button>
+      </div>
+
+      <div id="status">Ready.</div>
+      <audio id="audioPlayer" controls></audio>
+    </main>
+
+    <script>
+      const voiceSelect = document.getElementById("voiceSelect");
+      const modelSelect = document.getElementById("modelSelect");
+      const tempInput = document.getElementById("tempInput");
+      const formatSelect = document.getElementById("formatSelect");
+      const inputText = document.getElementById("inputText");
+      const generateBtn = document.getElementById("generateBtn");
+      const downloadBtn = document.getElementById("downloadBtn");
+      const statusEl = document.getElementById("status");
+      const audioPlayer = document.getElementById("audioPlayer");
+
+      let audioBlob = null;
+      let audioUrl = null;
+
+      function setStatus(message) {
+        statusEl.textContent = message;
+      }
+
+      function resetAudioUrl() {
+        if (audioUrl) {
+          URL.revokeObjectURL(audioUrl);
+          audioUrl = null;
+        }
+      }
+
+      async function loadVoices() {
+        setStatus("Loading voices...");
+        const [configRes, voicesRes] = await Promise.all([
+          fetch("/config"),
+          fetch("/v1/audio/voices"),
+        ]);
+        const configData = await configRes.json();
+        const voicesData = await voicesRes.json();
+        const voices = Array.isArray(voicesData.voices) ? voicesData.voices : [];
+        voiceSelect.innerHTML = "";
+        voices.forEach((voice) => {
+          const option = document.createElement("option");
+          option.value = voice.id;
+          option.textContent = voice.name || voice.id;
+          if (voice.id === configData.default_voice) {
+            option.selected = true;
+          }
+          voiceSelect.appendChild(option);
+        });
+        setStatus(`Loaded ${voices.length} voices.`);
+      }
+
+      async function generateAudio() {
+        const text = inputText.value.trim();
+        if (!text) {
+          setStatus("Please enter text first.");
+          return;
+        }
+
+        generateBtn.disabled = true;
+        downloadBtn.disabled = true;
+        setStatus("Generating audio...");
+
+        resetAudioUrl();
+        audioBlob = null;
+
+        try {
+          const payload = {
+            model: modelSelect.value,
+            input: text,
+            voice: voiceSelect.value || null,
+            response_format: formatSelect.value,
+            temp: Number(tempInput.value),
+          };
+
+          const res = await fetch("/v1/audio/speech", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+
+          if (!res.ok) {
+            const errText = await res.text();
+            throw new Error(errText || `Request failed (${res.status})`);
+          }
+
+          audioBlob = await res.blob();
+          audioUrl = URL.createObjectURL(audioBlob);
+          audioPlayer.src = audioUrl;
+          downloadBtn.disabled = false;
+          setStatus("Audio generated successfully.");
+        } catch (error) {
+          setStatus(`Generation failed: ${error.message}`);
+        } finally {
+          generateBtn.disabled = false;
+        }
+      }
+
+      function downloadAudio() {
+        if (!audioBlob) {
+          return;
+        }
+        const ext = formatSelect.value;
+        const a = document.createElement("a");
+        a.href = audioUrl;
+        a.download = `vibevoice-output.${ext}`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      }
+
+      generateBtn.addEventListener("click", generateAudio);
+      downloadBtn.addEventListener("click", downloadAudio);
+
+      loadVoices().catch((error) => {
+        setStatus(`Failed to load voices: ${error.message}`);
+      });
+    </script>
+  </body>
+</html>

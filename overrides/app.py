@@ -505,6 +505,7 @@ async def websocket_stream(ws: WebSocket) -> None:
     cfg_param = ws.query_params.get("cfg")
     steps_param = ws.query_params.get("steps")
     voice_param = ws.query_params.get("voice")
+    temp_param = ws.query_params.get("temp")
 
     try:
         cfg_scale = float(cfg_param) if cfg_param is not None else 1.5
@@ -518,6 +519,12 @@ async def websocket_stream(ws: WebSocket) -> None:
             inference_steps = None
     except ValueError:
         inference_steps = None
+    try:
+        temperature = float(temp_param) if temp_param is not None else 0.9
+        do_sample = temp_param is not None and temperature > 0
+    except ValueError:
+        temperature = 0.9
+        do_sample = False
 
     service: StreamingTTSService = app.state.tts_service
     lock: asyncio.Lock = app.state.websocket_lock
@@ -570,6 +577,7 @@ async def websocket_stream(ws: WebSocket) -> None:
             cfg_scale=cfg_scale,
             inference_steps=inference_steps,
             voice=voice_param,
+            temperature=temperature if do_sample else None,
         )
 
         stop_signal = threading.Event()
@@ -579,6 +587,8 @@ async def websocket_stream(ws: WebSocket) -> None:
             cfg_scale=cfg_scale,
             inference_steps=inference_steps,
             voice_key=voice_param,
+            do_sample=do_sample,
+            temperature=temperature,
             log_callback=enqueue_log,
             stop_event=stop_signal,
         )
@@ -634,6 +644,7 @@ class OpenAISpeechRequest(BaseModel):
     voice: Optional[str] = None
     response_format: Optional[str] = "opus"  # Default to opus
     speed: Optional[float] = 1.0
+    temp: Optional[float] = None
 
 
 @app.post("/v1/audio/speech")
@@ -642,8 +653,13 @@ async def openai_speech(request: OpenAISpeechRequest):
     lock: asyncio.Lock = app.state.websocket_lock
 
     async with lock:
-        # Determine voice
+        # Determine voice and sampling controls
         voice_key = request.voice
+        do_sample = request.temp is not None
+        temperature = request.temp if request.temp is not None else 0.9
+        if temperature <= 0:
+            temperature = 0.9
+            do_sample = False
 
         # Collect audio
         stop_event = threading.Event()
@@ -651,7 +667,11 @@ async def openai_speech(request: OpenAISpeechRequest):
         def generate_all():
             chunks = []
             iterator = service.stream(
-                request.input, voice_key=voice_key, stop_event=stop_event
+                request.input,
+                voice_key=voice_key,
+                do_sample=do_sample,
+                temperature=temperature,
+                stop_event=stop_event,
             )
             for chunk in iterator:
                 chunks.append(chunk)

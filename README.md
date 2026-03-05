@@ -83,6 +83,7 @@ curl http://127.0.0.1:8000/v1/audio/speech \
 | `input` | `string` | The text to generate audio for. |
 | `voice` | `string` | The voice ID to use (see `/v1/audio/voices`). |
 | `response_format` | `string` | Output format: `opus` (default, 48kHz), `wav`, or `mp3`. |
+| `temp` | `float` | Sampling temperature. When provided (>0), enables sampling with the given temperature. |
 | `speed` | `float` | Speed of generation (currently ignored). |
 
 ### 🎤 List Voices
