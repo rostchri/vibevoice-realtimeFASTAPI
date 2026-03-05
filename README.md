@@ -55,6 +55,16 @@
     - **Web UI**: Open [http://127.0.0.1:8000](http://127.0.0.1:8000)
     - **API**: `http://127.0.0.1:8000/v1/audio/speech`
 
+### 🌐 Frontpage Controls (Web UI)
+
+The frontpage at `/` is fully connected to backend endpoints and exposes:
+
+- **Model selection** (`tts-1`, `tts-1-hd`) for OpenAI-compatible requests
+- **Voice selection** from `GET /config` and `GET /v1/audio/voices`
+- **Temperature control** (`temp`): set `0` to disable sampling
+- **Generate Audio** action that calls `POST /v1/audio/speech`
+- **Download Audio** action to export the generated file in the selected format (`opus`/`wav`/`mp3`)
+
 ## 📖 API Documentation
 
 This runner provides OpenAI-compatible endpoints for easy integration with existing tools and libraries.
@@ -64,6 +74,7 @@ This runner provides OpenAI-compatible endpoints for easy integration with exist
 **Endpoint**: `POST /v1/audio/speech`
 
 Generates audio from text with LavaSR super-resolution enabled by default (24kHz → 48kHz).
+This is also the endpoint used by the frontpage "Generate Audio" button.
 
 ```bash
 curl http://127.0.0.1:8000/v1/audio/speech \
@@ -83,6 +94,7 @@ curl http://127.0.0.1:8000/v1/audio/speech \
 | `input` | `string` | The text to generate audio for. |
 | `voice` | `string` | The voice ID to use (see `/v1/audio/voices`). |
 | `response_format` | `string` | Output format: `opus` (default, 48kHz), `wav`, or `mp3`. |
+| `temp` | `float` | Sampling temperature. When provided (>0), enables sampling with the given temperature. |
 | `speed` | `float` | Speed of generation (currently ignored). |
 
 ### 🎤 List Voices

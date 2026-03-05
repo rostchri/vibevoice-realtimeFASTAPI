@@ -116,6 +116,12 @@ def main():
         if override_tp.exists():
             shutil.copy2(override_tp, target_tp)
 
+        # Copy index.html
+        override_index = overrides_dir / "index.html"
+        target_index = vibevoice_dir / "demo" / "web" / "index.html"
+        if override_index.exists():
+            shutil.copy2(override_index, target_index)
+
     # Set environment variables (as the demo script expects)
     os.environ["MODEL_PATH"] = str(model_path)
     os.environ["MODEL_DEVICE"] = device
