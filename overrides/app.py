@@ -3,6 +3,7 @@ import builtins
 import asyncio
 import json
 import os
+import time
 import threading
 import traceback
 import io
@@ -76,11 +77,12 @@ class StreamingTTSService:
         self.model: Optional[VibeVoiceStreamingForConditionalGenerationInference] = None
         self.voice_presets: Dict[str, Path] = {}
         self.default_voice_key: Optional[str] = None
-        self._voice_cache: Dict[str, Tuple[object, Path, str]] = {}
+        self._voice_cache: Dict[str, object] = {}
         self.flashsr: Optional[LavaSRUpsampler] = None
 
         self._compute_stream: Optional[torch.cuda.Stream] = None
         self._transfer_stream: Optional[torch.cuda.Stream] = None
+        self._active_inference_steps: Optional[int] = None
 
         if device == "mpx":
             print("Note: device 'mpx' detected, treating it as 'mps'.")
@@ -105,52 +107,79 @@ class StreamingTTSService:
         print(f"[startup] Loading processor from {self.model_path}")
         self.processor = VibeVoiceStreamingProcessor.from_pretrained(self.model_path)
 
-        # Decide dtype & attention
-        if self.device == "mps":
-            load_dtype = torch.float32
-            device_map = None
-            attn_impl_primary = "sdpa"
-        elif self.device == "cuda":
+        # Decide dtype and load strategy (with hard fallback when FlashAttention is unavailable)
+        if self.device == "cuda":
             load_dtype = torch.bfloat16
-            device_map = "cuda"
-            attn_impl_primary = "flash_attention_2"
+            load_attempts = [
+                {
+                    "attn": "flash_attention_2",
+                    "device_map": "cuda",
+                    "move_to": None,
+                    "label": "cuda + flash_attention_2",
+                },
+                {
+                    "attn": "sdpa",
+                    "device_map": None,
+                    "move_to": "cuda",
+                    "label": "cuda + sdpa (no device_map)",
+                },
+            ]
+        elif self.device == "mps":
+            load_dtype = torch.float32
+            load_attempts = [
+                {
+                    "attn": "sdpa",
+                    "device_map": None,
+                    "move_to": "mps",
+                    "label": "mps + sdpa",
+                }
+            ]
         else:
             load_dtype = torch.float32
-            device_map = "cpu"
-            attn_impl_primary = "sdpa"
-        print(
-            f"Using device: {device_map}, torch_dtype: {load_dtype}, attn_implementation: {attn_impl_primary}"
-        )
-        # Load model
-        try:
-            self.model = (
-                VibeVoiceStreamingForConditionalGenerationInference.from_pretrained(
-                    self.model_path,
-                    torch_dtype=load_dtype,
-                    device_map=device_map,
-                    attn_implementation=attn_impl_primary,
-                )
-            )
+            load_attempts = [
+                {
+                    "attn": "sdpa",
+                    "device_map": None,
+                    "move_to": None,
+                    "label": "cpu + sdpa",
+                }
+            ]
 
-            if self.device == "mps":
-                self.model.to("mps")
-        except Exception as e:
-            if attn_impl_primary == "flash_attention_2":
-                print(
-                    "Error loading the model. Trying to use SDPA. However, note that only flash_attention_2 has been fully tested, and using SDPA may result in lower audio quality."
-                )
+        print(f"Using device: {self.device}, torch_dtype: {load_dtype}")
 
-                self.model = (
+        self.model = None
+        last_error: Optional[Exception] = None
+        for attempt in load_attempts:
+            kwargs = {
+                "torch_dtype": load_dtype,
+                "attn_implementation": attempt["attn"],
+                "low_cpu_mem_usage": False,
+            }
+            if attempt["device_map"] is not None:
+                kwargs["device_map"] = attempt["device_map"]
+
+            try:
+                print(f"[startup] Loading model with {attempt['label']}")
+                candidate = (
                     VibeVoiceStreamingForConditionalGenerationInference.from_pretrained(
                         self.model_path,
-                        torch_dtype=load_dtype,
-                        device_map=self.device,
-                        attn_implementation="sdpa",
+                        **kwargs,
                     )
                 )
-                print("Load model with SDPA successfully ")
-            else:
-                raise e
+                move_target = attempt["move_to"]
+                if move_target:
+                    candidate.to(move_target)
+                self.model = candidate
+                print(f"[startup] Model load succeeded with {attempt['label']}")
+                break
+            except Exception as exc:
+                last_error = exc
+                print(f"[startup] Model load failed with {attempt['label']}: {exc}")
+
+        if self.model is None:
+            raise RuntimeError(
+                "Failed to load model after all fallback attempts"
+            ) from last_error
 
         self.model.eval()
 
@@ -160,6 +189,7 @@ class StreamingTTSService:
             beta_schedule="squaredcos_cap_v2",
         )
         self.model.set_ddpm_inference_steps(num_steps=self.inference_steps)
+        self._active_inference_steps = self.inference_steps
 
         if self.device == "cuda" and hasattr(torch, "compile"):
             print(
@@ -193,6 +223,63 @@ class StreamingTTSService:
             print("[startup] LavaSR disabled, audio will remain at 24kHz")
             self.flashsr = LavaSRUpsampler(device=self.device, enable=False)
 
+    def _set_inference_steps(self, steps: int) -> None:
+        if self.model is None:
+            raise RuntimeError("StreamingTTSService not initialized")
+
+        if self._active_inference_steps != steps:
+            self.model.set_ddpm_inference_steps(num_steps=steps)
+            self._active_inference_steps = steps
+
+        self.inference_steps = steps
+
+    def warmup(self, text: str = "Warmup run.") -> None:
+        if self.processor is None or self.model is None:
+            print("[startup] Warmup skipped: service not initialized")
+            return
+
+        started_at = time.perf_counter()
+        try:
+            _, prefilled_outputs = self._get_voice_resources(self.default_voice_key)
+            inputs = self._prepare_inputs(text, prefilled_outputs)
+            outputs = self.model.generate(
+                **inputs,
+                max_new_tokens=None,
+                cfg_scale=1.5,
+                tokenizer=self.processor.tokenizer,
+                generation_config={
+                    "do_sample": False,
+                    "temperature": 1.0,
+                    "top_p": 1.0,
+                },
+                verbose=False,
+                refresh_negative=True,
+                all_prefilled_outputs=copy.deepcopy(prefilled_outputs),
+            )
+
+            if self.device == "cuda":
+                torch.cuda.synchronize()
+
+            if self.flashsr and self.flashsr.enabled and outputs.speech_outputs:
+                warmup_audio = outputs.speech_outputs[0]
+                if warmup_audio is not None:
+                    if torch.is_tensor(warmup_audio):
+                        warmup_audio = warmup_audio.reshape(-1)[: self.sample_rate // 4]
+                    else:
+                        warmup_audio = np.asarray(warmup_audio).reshape(-1)[
+                            : self.sample_rate // 4
+                        ]
+                    if len(warmup_audio) > 0:
+                        self.flashsr.upsample_chunks(
+                            warmup_audio, sample_rate=self.sample_rate
+                        )
+
+            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+            print(f"[startup] Warmup complete in {elapsed_ms:.1f} ms")
+        except Exception as exc:
+            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+            print(f"[startup] Warmup failed after {elapsed_ms:.1f} ms: {exc}")
+
     def _load_voice_presets(self) -> Dict[str, Path]:
         voices_dir = BASE.parent / "voices" / "streaming_model"
         if not voices_dir.exists():
@@ -220,7 +307,7 @@ class StreamingTTSService:
         print(f"[startup] Using fallback voice preset: {first_key}")
         return first_key
 
-    def _ensure_voice_cached(self, key: str) -> Tuple[object, Path, str]:
+    def _ensure_voice_cached(self, key: str) -> object:
         if key not in self.voice_presets:
             raise RuntimeError(f"Voice preset {key!r} not found")
 
@@ -237,9 +324,7 @@ class StreamingTTSService:
 
         return self._voice_cache[key]
 
-    def _get_voice_resources(
-        self, requested_key: Optional[str]
-    ) -> Tuple[str, object, Path, str]:
+    def _get_voice_resources(self, requested_key: Optional[str]) -> Tuple[str, object]:
         key = (
             requested_key
             if requested_key and requested_key in self.voice_presets
@@ -266,10 +351,18 @@ class StreamingTTSService:
 
         processed = self.processor.process_input_with_cached_prompt(**processor_kwargs)
 
-        prepared = {
-            key: value.to(self._torch_device) if hasattr(value, "to") else value
-            for key, value in processed.items()
-        }
+        prepared = {}
+        non_blocking = self.device == "cuda"
+        for key, value in processed.items():
+            if torch.is_tensor(value):
+                if value.device != self._torch_device:
+                    prepared[key] = value.to(
+                        self._torch_device, non_blocking=non_blocking
+                    )
+                else:
+                    prepared[key] = value
+            else:
+                prepared[key] = value
         return prepared
 
     def _run_generation(
@@ -336,7 +429,7 @@ class StreamingTTSService:
         refresh_negative: bool = True,
         inference_steps: Optional[int] = None,
         voice_key: Optional[str] = None,
-        log_callback: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+        log_callback: Optional[Callable[..., None]] = None,
         stop_event: Optional[threading.Event] = None,
     ) -> Iterator[np.ndarray]:
         # 1. Clean and normalize
@@ -367,9 +460,7 @@ class StreamingTTSService:
             except (TypeError, ValueError):
                 pass
 
-        if self.model is not None:
-            self.model.set_ddpm_inference_steps(num_steps=steps_to_use)
-        self.inference_steps = steps_to_use
+        self._set_inference_steps(steps_to_use)
 
         # Global stop signal for the entire request
         stop_signal = stop_event or threading.Event()
@@ -411,36 +502,54 @@ class StreamingTTSService:
                         break
 
                     if torch.is_tensor(audio_chunk):
-                        if self._transfer_stream:
-                            with torch.cuda.stream(self._transfer_stream):
-                                # Async transfer to CPU
-                                audio_chunk = audio_chunk.detach().to(
-                                    torch.float32, non_blocking=True
-                                )
-                            # Wait only for this transfer to finish before numpy conversion
-                            self._transfer_stream.synchronize()
-                            audio_chunk = audio_chunk.cpu().numpy()
-                        else:
-                            audio_chunk = (
-                                audio_chunk.detach().cpu().to(torch.float32).numpy()
+                        tensor_chunk = audio_chunk.detach()
+                        if tensor_chunk.ndim > 1:
+                            tensor_chunk = tensor_chunk.reshape(-1)
+
+                        peak = (
+                            float(torch.max(torch.abs(tensor_chunk)).item())
+                            if tensor_chunk.numel()
+                            else 0.0
+                        )
+                        if peak > 1.0:
+                            tensor_chunk = tensor_chunk / peak
+
+                        if self.flashsr and self.flashsr.enabled:
+                            audio_chunk = self.flashsr.upsample_chunks(
+                                tensor_chunk, sample_rate=self.sample_rate
                             )
+                        elif (
+                            self._transfer_stream and tensor_chunk.device.type == "cuda"
+                        ):
+                            with torch.cuda.stream(self._transfer_stream):
+                                cpu_chunk = tensor_chunk.to(
+                                    device="cpu",
+                                    dtype=torch.float32,
+                                    non_blocking=True,
+                                )
+                            self._transfer_stream.synchronize()
+                            audio_chunk = cpu_chunk.numpy()
+                        else:
+                            audio_chunk = tensor_chunk.to(
+                                device="cpu", dtype=torch.float32
+                            ).numpy()
                     else:
                         audio_chunk = np.asarray(audio_chunk, dtype=np.float32)
 
-                    if audio_chunk.ndim > 1:
-                        audio_chunk = audio_chunk.reshape(-1)
+                        if audio_chunk.ndim > 1:
+                            audio_chunk = audio_chunk.reshape(-1)
 
-                    peak = np.max(np.abs(audio_chunk)) if audio_chunk.size else 0.0
-                    if peak > 1.0:
-                        audio_chunk = audio_chunk / peak
+                        peak = np.max(np.abs(audio_chunk)) if audio_chunk.size else 0.0
+                        if peak > 1.0:
+                            audio_chunk = audio_chunk / peak
 
-                    # Apply LavaSR upsampling if enabled
-                    if self.flashsr and self.flashsr.enabled:
-                        audio_chunk = self.flashsr.upsample_chunks(
-                            audio_chunk, sample_rate=self.sample_rate
-                        )
+                        # Apply LavaSR upsampling if enabled
+                        if self.flashsr and self.flashsr.enabled:
+                            audio_chunk = self.flashsr.upsample_chunks(
+                                audio_chunk, sample_rate=self.sample_rate
+                            )
 
-                    chunk_to_yield = audio_chunk.astype(np.float32, copy=False)
+                    chunk_to_yield = np.asarray(audio_chunk, dtype=np.float32)
                     yield chunk_to_yield
 
             except Exception as e:
@@ -495,6 +604,17 @@ async def _startup() -> None:
         enable_flashsr=enable_flashsr,
     )
     service.load()
+
+    enable_warmup = os.environ.get("ENABLE_STARTUP_WARMUP", "true").lower() in (
+        "true",
+        "1",
+        "yes",
+        "on",
+    )
+    if enable_warmup:
+        service.warmup()
+    else:
+        print("[startup] Warmup disabled")
 
     app.state.tts_service = service
     app.state.model_path = model_path

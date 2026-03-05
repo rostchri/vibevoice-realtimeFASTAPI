@@ -25,6 +25,62 @@ from vibevoice.processor.vibevoice_streaming_processor import (
 SAMPLE_RATE = 24000
 
 
+def load_model_with_fallback(model_path: str, device: str):
+    if device == "cuda":
+        load_dtype = torch.bfloat16
+        attempts = [
+            {
+                "attn": "flash_attention_2",
+                "device_map": "cuda",
+                "move_to": None,
+                "label": "cuda + flash_attention_2",
+            },
+            {
+                "attn": "sdpa",
+                "device_map": None,
+                "move_to": "cuda",
+                "label": "cuda + sdpa (no device_map)",
+            },
+        ]
+    else:
+        load_dtype = torch.float32
+        move_to = "mps" if device == "mps" else None
+        attempts = [
+            {
+                "attn": "sdpa",
+                "device_map": None,
+                "move_to": move_to,
+                "label": f"{device} + sdpa",
+            }
+        ]
+
+    last_error = None
+    for attempt in attempts:
+        kwargs = {
+            "torch_dtype": load_dtype,
+            "attn_implementation": attempt["attn"],
+            "low_cpu_mem_usage": False,
+        }
+        if attempt["device_map"] is not None:
+            kwargs["device_map"] = attempt["device_map"]
+
+        try:
+            print(f"[startup] Loading model with {attempt['label']}...")
+            model = VibeVoiceStreamingForConditionalGenerationInference.from_pretrained(
+                model_path,
+                **kwargs,
+            )
+            if attempt["move_to"]:
+                model = model.to(attempt["move_to"])
+            print(f"[startup] Model load succeeded with {attempt['label']}")
+            return model
+        except Exception as exc:
+            last_error = exc
+            print(f"[startup] Model load failed with {attempt['label']}: {exc}")
+
+    raise RuntimeError("Model loading failed after fallback attempts") from last_error
+
+
 def benchmark_tts(
     model_path: str,
     device: str = "cuda",
@@ -56,20 +112,7 @@ def benchmark_tts(
     print("[2/4] Loading model...")
     t0 = time.time()
 
-    if device == "cuda":
-        model = VibeVoiceStreamingForConditionalGenerationInference.from_pretrained(
-            model_path,
-            torch_dtype=torch.bfloat16,
-            device_map="cuda",
-            attn_implementation="flash_attention_2",
-        )
-    else:
-        model = VibeVoiceStreamingForConditionalGenerationInference.from_pretrained(
-            model_path,
-            torch_dtype=torch.float32,
-            device_map=device,
-            attn_implementation="sdpa",
-        )
+    model = load_model_with_fallback(model_path=model_path, device=device)
 
     model.eval()
     model.model.noise_scheduler = model.model.noise_scheduler.from_config(

@@ -183,6 +183,40 @@ uv run python scripts/run_realtime_demo.py
 | 1.00s | 1.9ms | 523x realtime |
 | 2.00s | 2.1ms | 961x realtime |
 
+## 📊 Realtime Benchmarking (`/stream`)
+
+Use the websocket benchmark script to measure TTFA, chunk pacing, and RTF with reproducible settings.
+
+```bash
+uv run python scripts/benchmark_stream_endpoint.py \
+  --ws-url ws://127.0.0.1:8000/stream \
+  --voice en-Carter_man \
+  --runs 10 \
+  --temp 0 \
+  --steps 5
+```
+
+The script writes a JSON report to `/tmp` by default and can compare against a prior run using `--baseline-json`.
+
+## 🔧 Recommended Concurrency
+
+Based on end-to-end benchmarks (TTS + Whisper transcription), the recommended default concurrency is **2 concurrent requests**.
+
+**Benchmark Results (RTX 3090, 5 inference steps):**
+
+| Concurrency | TTS avg/p95 (s) | Whisper avg/p95 (s) | E2E avg (s) | Throughput (req/s) |
+|-------------|-----------------|---------------------|-------------|-------------------|
+| 2 | 5.57 / 9.11 | 0.39 / 0.66 | 5.96 | 0.333 |
+| 4 | 11.15 / 14.55 | 0.43 / 0.82 | 11.58 | 0.324 |
+| 8 | 20.86 / 27.11 | 0.43 / 0.81 | 21.29 | 0.322 |
+
+**Key Findings:**
+- TTS is the bottleneck; Whisper adds minimal latency (~0.3-0.4s) regardless of concurrency
+- Throughput plateaus at ~0.32-0.33 req/s beyond 2 concurrent requests
+- Latency increases significantly with higher concurrency due to TTS queueing
+- Single-stream RTF: ~0.39 (2.6x faster than realtime)
+- Recommended max concurrent requests: **2** for optimal latency/throughput balance
+
 ## 🎧 Demos
 
 All examples generated using **15 inference steps** with text in the voice's native language.

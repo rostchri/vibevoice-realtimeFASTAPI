@@ -7,7 +7,7 @@ Supports direct 24kHz input (no downsampling needed).
 import torch
 import torchaudio.transforms as T
 import numpy as np
-from typing import Optional
+from typing import Optional, Union
 from pathlib import Path
 import sys
 
@@ -71,22 +71,37 @@ class LavaSRUpsampler:
             traceback.print_exc()
             self._bwe_model = None
 
-    def upsample(self, audio: np.ndarray, sample_rate: int = 24000) -> np.ndarray:
-        if not self.enabled or self._bwe_model is None:
+    def upsample(
+        self, audio: Union[np.ndarray, torch.Tensor], sample_rate: int = 24000
+    ) -> np.ndarray:
+        upsampler = self._upsampler
+        bwe_model = self._bwe_model
+
+        if not self.enabled or bwe_model is None or upsampler is None:
+            if torch.is_tensor(audio):
+                return audio.detach().to(device="cpu", dtype=torch.float32).numpy()
             return audio
 
-        audio_tensor = torch.from_numpy(audio).float().to(self.device)
+        if torch.is_tensor(audio):
+            audio_tensor = audio.detach()
+            if audio_tensor.device != self.device:
+                audio_tensor = audio_tensor.to(self.device, non_blocking=True)
+            if audio_tensor.dtype != torch.float32:
+                audio_tensor = audio_tensor.to(dtype=torch.float32)
+        else:
+            audio_tensor = torch.from_numpy(audio).to(self.device, dtype=torch.float32)
 
         if audio_tensor.ndim == 1:
             audio_tensor = audio_tensor.unsqueeze(0)
 
+        autocast_enabled = self.device.type == "cuda"
         with torch.no_grad():
-            resampled = self._upsampler(audio_tensor)
-            enhanced = self._bwe_model.infer(resampled, autocast=True)
+            resampled = upsampler(audio_tensor)
+            enhanced = bwe_model.infer(resampled, autocast=autocast_enabled)
 
         return enhanced.squeeze(0).cpu().float().numpy()
 
     def upsample_chunks(
-        self, audio_chunk: np.ndarray, sample_rate: int = 24000
+        self, audio_chunk: Union[np.ndarray, torch.Tensor], sample_rate: int = 24000
     ) -> np.ndarray:
         return self.upsample(audio_chunk, sample_rate)
