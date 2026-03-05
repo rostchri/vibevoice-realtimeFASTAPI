@@ -63,7 +63,7 @@ class StreamingTTSService:
         self,
         model_path: str,
         device: str = "cuda",
-        inference_steps: int = 15,
+        inference_steps: int = 5,
         enable_flashsr: bool = True,
     ) -> None:
         # Keep model_path as string for HuggingFace repo IDs (Path() converts / to \ on Windows)
@@ -480,7 +480,7 @@ async def _startup() -> None:
 
     device = os.environ.get("MODEL_DEVICE", "cuda")
 
-    inference_steps = int(os.environ.get("INFERENCE_STEPS", "15"))
+    inference_steps = int(os.environ.get("INFERENCE_STEPS", "5"))
 
     # LavaSR enabled by default
     enable_flashsr_str = os.environ.get(

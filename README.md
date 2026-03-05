@@ -139,10 +139,10 @@ uv run python scripts/run_realtime_demo.py --device cpu
 
 ### Inference Steps
 
-Specify the number of DDPM inference steps. Higher values (e.g., 15-20) improve quality but increase latency. The default is **15**.
+Specify the number of DDPM inference steps. Lower values reduce latency and improve realtime responsiveness. The default is **5** (official realtime profile).
 
 ```bash
-uv run python scripts/run_realtime_demo.py --inference-steps 15
+uv run python scripts/run_realtime_demo.py --inference-steps 5
 ```
 
 ### Custom Model Path

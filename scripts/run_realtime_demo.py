@@ -58,8 +58,8 @@ def main():
     parser.add_argument(
         "--inference-steps",
         type=int,
-        default=15,
-        help="Number of inference steps (default: 15)",
+        default=5,
+        help="Number of inference steps (default: 5)",
     )
     args = parser.parse_args()
 
