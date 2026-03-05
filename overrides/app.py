@@ -48,6 +48,16 @@ def get_timestamp():
     return timestamp
 
 
+def parse_temperature(temp_value: Optional[Any]) -> Tuple[float, bool]:
+    try:
+        temperature = (
+            float(temp_value) if temp_value is not None else DEFAULT_TEMPERATURE
+        )
+    except (TypeError, ValueError):
+        return DEFAULT_TEMPERATURE, False
+    return temperature, temp_value is not None and temperature > 0
+
+
 class StreamingTTSService:
     def __init__(
         self,
@@ -520,14 +530,7 @@ async def websocket_stream(ws: WebSocket) -> None:
             inference_steps = None
     except ValueError:
         inference_steps = None
-    try:
-        temperature = (
-            float(temp_param) if temp_param is not None else DEFAULT_TEMPERATURE
-        )
-        do_sample = temp_param is not None and temperature > 0
-    except ValueError:
-        temperature = DEFAULT_TEMPERATURE
-        do_sample = False
+    temperature, do_sample = parse_temperature(temp_param)
 
     service: StreamingTTSService = app.state.tts_service
     lock: asyncio.Lock = app.state.websocket_lock
@@ -658,13 +661,7 @@ async def openai_speech(request: OpenAISpeechRequest):
     async with lock:
         # Determine voice and sampling controls
         voice_key = request.voice
-        do_sample = request.temp is not None
-        temperature = (
-            request.temp if request.temp is not None else DEFAULT_TEMPERATURE
-        )
-        if temperature <= 0:
-            temperature = DEFAULT_TEMPERATURE
-            do_sample = False
+        temperature, do_sample = parse_temperature(request.temp)
 
         # Collect audio
         stop_event = threading.Event()
