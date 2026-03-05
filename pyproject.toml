@@ -11,6 +11,8 @@ requires-python = ">=3.11,<3.13"
 dependencies = [
     # Keep HF Hub <1.0 to satisfy transformers' constraints used by VibeVoice.
     "huggingface_hub>=0.30.0,<1.0",
+    # VibeVoice streaming path is validated against 4.51.3; newer releases regress KV cache masking.
+    "transformers==4.51.3",
     # Ensure uv manages VibeVoice + its dependency set (prevents uv from \"undoing\" the env).
     "inflect>=7.5.0",
     "vibevoice",
