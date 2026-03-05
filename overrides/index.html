@@ -63,6 +63,10 @@
   <body>
     <main class="card">
       <h1>VibeVoice Realtime Demo</h1>
+      <p>
+        This frontpage is wired to backend endpoints so you can pick a model and voice,
+        tune temperature, generate speech, preview it, and download the file.
+      </p>
 
       <label for="inputText">Input Text</label>
       <textarea id="inputText" placeholder="Enter text to synthesize"></textarea>
@@ -100,6 +104,10 @@
 
       <div id="status">Ready.</div>
       <audio id="audioPlayer" controls></audio>
+      <p style="margin-top: 10px; font-size: 13px; color: #444">
+        API mapping: voices are loaded from <code>/config</code> + <code>/v1/audio/voices</code>,
+        audio is generated via <code>POST /v1/audio/speech</code>. Use <code>temp=0</code> to disable sampling.
+      </p>
     </main>
 
     <script>
@@ -164,12 +172,13 @@
         audioBlob = null;
 
         try {
+          const parsedTemp = Number(tempInput.value);
           const payload = {
             model: modelSelect.value,
             input: text,
             voice: voiceSelect.value || null,
             response_format: formatSelect.value,
-            temp: Number(tempInput.value),
+            temp: Number.isFinite(parsedTemp) ? parsedTemp : 0.9,
           };
 
           const res = await fetch("/v1/audio/speech", {
