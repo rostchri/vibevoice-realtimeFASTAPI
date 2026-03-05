@@ -198,6 +198,39 @@ uv run python scripts/benchmark_stream_endpoint.py \
 
 The script writes a JSON report to `/tmp` by default and can compare against a prior run using `--baseline-json`.
 
+## 🚀 Production Deployment
+
+**Important:** This is a TTS-only service. Whisper transcription is **not** automatically launched. Whisper endpoints (if needed for validation) must be run separately.
+
+### Starting the Server
+
+```bash
+# Recommended: Use the provided script with GPU selection
+CUDA_VISIBLE_DEVICES=2 uv run python scripts/run_realtime_demo.py --port 8000
+
+# Or run the demo directly
+CUDA_VISIBLE_DEVICES=2 uv run python third_party/VibeVoice/demo/vibevoice_realtime_demo.py \
+  --port 8000 \
+  --model_path models/VibeVoice-Realtime-0.5B \
+  --device cuda \
+  --inference_steps 5
+```
+
+**Note:** Replace `CUDA_VISIBLE_DEVICES=2` with your available GPU. Check GPU availability with `nvidia-smi`.
+
+### Restarting with New Code
+
+After pulling updates, restart the server to apply changes:
+
+```bash
+# Find and kill existing process
+ps aux | grep vibevoice_realtime_demo
+kill <PID>
+
+# Restart with new code
+CUDA_VISIBLE_DEVICES=2 uv run python scripts/run_realtime_demo.py --port 8000
+```
+
 ## 🔧 Recommended Concurrency
 
 Based on end-to-end benchmarks (TTS + Whisper transcription), the recommended default concurrency is **2 concurrent requests**.
