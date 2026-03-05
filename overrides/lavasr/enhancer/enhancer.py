@@ -5,7 +5,7 @@ from torch import nn
 from vocos import Vocos
 from torch.cuda.amp import autocast as autocast_func
 
-from overrides.lavasr.enhancer.linkwitz_merge import FastLRMerge
+from .linkwitz_merge import FastLRMerge
 
 
 class MelSpectrogramFeaturesWithFreq(nn.Module):

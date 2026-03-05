@@ -92,18 +92,19 @@ def main():
     overrides_dir = project_root / "overrides"
     if overrides_dir.exists():
         import shutil
+
         # Copy app.py
         override_app = overrides_dir / "app.py"
         target_app = vibevoice_dir / "demo" / "web" / "app.py"
         if override_app.exists():
             shutil.copy2(override_app, target_app)
-        
+
         # Copy vibevoice_realtime_demo.py
         override_demo = overrides_dir / "vibevoice_realtime_demo.py"
         target_demo = vibevoice_dir / "demo" / "vibevoice_realtime_demo.py"
         if override_demo.exists():
             shutil.copy2(override_demo, target_demo)
-            
+
         # Copy realtime_model_inference_from_file.py
         override_inf = overrides_dir / "realtime_model_inference_from_file.py"
         target_inf = vibevoice_dir / "demo" / "realtime_model_inference_from_file.py"
@@ -121,6 +122,33 @@ def main():
         target_index = vibevoice_dir / "demo" / "web" / "index.html"
         if override_index.exists():
             shutil.copy2(override_index, target_index)
+
+        # Copy lavasr directory
+        override_lavasr = overrides_dir / "lavasr"
+        target_lavasr = vibevoice_dir / "demo" / "web" / "lavasr"
+        if override_lavasr.exists():
+            if target_lavasr.exists():
+                shutil.rmtree(target_lavasr)
+            shutil.copytree(override_lavasr, target_lavasr)
+
+        # Copy novasr directory
+        override_novasr = overrides_dir / "novasr"
+        target_novasr = vibevoice_dir / "demo" / "web" / "novasr"
+        if override_novasr.exists():
+            if target_novasr.exists():
+                shutil.rmtree(target_novasr)
+            shutil.copytree(override_novasr, target_novasr)
+
+        # Copy upsampler files
+        for upsampler in [
+            "lavasr_upsampler.py",
+            "novasr_upsampler.py",
+            "flashsr_upsampler.py",
+        ]:
+            override_upsampler = overrides_dir / upsampler
+            target_upsampler = vibevoice_dir / "demo" / "web" / upsampler
+            if override_upsampler.exists():
+                shutil.copy2(override_upsampler, target_upsampler)
 
     # Set environment variables (as the demo script expects)
     os.environ["MODEL_PATH"] = str(model_path)

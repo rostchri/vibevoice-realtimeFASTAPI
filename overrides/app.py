@@ -253,7 +253,7 @@ class StreamingTTSService:
         return key, prefilled_outputs
 
     def _prepare_inputs(self, text: str, prefilled_outputs: object):
-        if not self.processor or not self.model:
+        if self.processor is None or self.model is None:
             raise RuntimeError("StreamingTTSService not initialized")
 
         processor_kwargs = {
@@ -367,7 +367,7 @@ class StreamingTTSService:
             except (TypeError, ValueError):
                 pass
 
-        if self.model:
+        if self.model is not None:
             self.model.set_ddpm_inference_steps(num_steps=steps_to_use)
         self.inference_steps = steps_to_use
 
