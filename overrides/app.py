@@ -35,6 +35,7 @@ import copy
 BASE = Path(__file__).parent
 SAMPLE_RATE = 24_000
 UPSAMPLED_RATE = 48_000
+DEFAULT_TEMPERATURE = 0.9
 
 
 def get_timestamp():
@@ -520,10 +521,12 @@ async def websocket_stream(ws: WebSocket) -> None:
     except ValueError:
         inference_steps = None
     try:
-        temperature = float(temp_param) if temp_param is not None else 0.9
+        temperature = (
+            float(temp_param) if temp_param is not None else DEFAULT_TEMPERATURE
+        )
         do_sample = temp_param is not None and temperature > 0
     except ValueError:
-        temperature = 0.9
+        temperature = DEFAULT_TEMPERATURE
         do_sample = False
 
     service: StreamingTTSService = app.state.tts_service
@@ -656,9 +659,11 @@ async def openai_speech(request: OpenAISpeechRequest):
         # Determine voice and sampling controls
         voice_key = request.voice
         do_sample = request.temp is not None
-        temperature = request.temp if request.temp is not None else 0.9
+        temperature = (
+            request.temp if request.temp is not None else DEFAULT_TEMPERATURE
+        )
         if temperature <= 0:
-            temperature = 0.9
+            temperature = DEFAULT_TEMPERATURE
             do_sample = False
 
         # Collect audio
