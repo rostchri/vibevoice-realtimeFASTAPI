@@ -13,7 +13,7 @@ dependencies = [
     "huggingface_hub>=0.30.0,<1.0",
     # VibeVoice streaming path is validated against 4.51.3; newer releases regress KV cache masking.
     "transformers==4.51.3",
-    # Ensure uv manages VibeVoice + its dependency set (prevents uv from \"undoing\" the env).
+    # Ensure uv manages VibeVoice + its dependency set (prevents uv from "undoing" the env).
     "inflect>=7.5.0",
     "vibevoice",
     # Audio processing
@@ -23,6 +23,16 @@ dependencies = [
     "einops>=0.8.0",
 ]
 
+[project.optional-dependencies]
+cuda = [
+    "flash-attn>=2.0.0",
+]
+dev = [
+    "pytest>=7.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+]
+
 [tool.setuptools]
 # Prevent setuptools from trying to treat top-level folders like `models/` and `third_party/`
 # as importable packages when uv installs this project.
@@ -30,3 +40,17 @@ py-modules = ["main"]
 
 [tool.uv.sources]
 vibevoice = { path = "third_party/VibeVoice", editable = true }
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true

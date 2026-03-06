@@ -2,10 +2,10 @@ import torch
 import torchaudio
 from huggingface_hub import snapshot_download
 
-from .enhancer.enhancer import LavaBWE
 from .denoiser.denoiser import LavaDenoiser
-from .utils import wav_to_1s_batches, load_wav
+from .enhancer.enhancer import LavaBWE
 from .enhancer.linkwitz_merge import FastLRMerge
+from .utils import load_wav, wav_to_1s_batches
 
 
 class LavaEnhance:
@@ -14,9 +14,7 @@ class LavaEnhance:
             model_path = snapshot_download(model_path)
 
         self.device = device
-        self.bwe_model = LavaBWE(
-            f"{model_path}/enhancer", device=device
-        )  ## proposed work
+        self.bwe_model = LavaBWE(f"{model_path}/enhancer", device=device)  ## proposed work
         self.denoiser_model = LavaDenoiser(
             f"{model_path}/denoiser/denoiser.bin", device=device
         )  ## based on UL-UNAS
@@ -65,6 +63,4 @@ class LavaEnhance2(LavaEnhance):
 
         self.device = device
         self.bwe_model = LavaBWE(f"{model_path}/enhancer_v2", device=device)
-        self.denoiser_model = LavaDenoiser(
-            f"{model_path}/denoiser/denoiser.bin", device=device
-        )
+        self.denoiser_model = LavaDenoiser(f"{model_path}/denoiser/denoiser.bin", device=device)

@@ -1,9 +1,10 @@
-import torch
 import types
+
+import torch
 import torchaudio
 from torch import nn
-from vocos import Vocos
 from torch.cuda.amp import autocast as autocast_func
+from vocos import Vocos
 
 from .linkwitz_merge import FastLRMerge
 
@@ -85,9 +86,7 @@ class LavaBWE:
         self.bwe_model.load_state_dict(state_dict)
         self.bwe_model = self.bwe_model.eval().to(device)
 
-        self.bwe_model.head.forward = types.MethodType(
-            custom_forward, self.bwe_model.head
-        )
+        self.bwe_model.head.forward = types.MethodType(custom_forward, self.bwe_model.head)
 
     def infer(self, wav, autocast=False):
         """Inference function for bwe"""

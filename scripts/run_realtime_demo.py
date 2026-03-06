@@ -28,9 +28,7 @@ def detect_device():
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Run VibeVoice realtime demo server locally"
-    )
+    parser = argparse.ArgumentParser(description="Run VibeVoice realtime demo server locally")
     parser.add_argument(
         "--port",
         type=int,

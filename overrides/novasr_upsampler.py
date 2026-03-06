@@ -3,12 +3,13 @@ NovaSR audio super-resolution integration for upsampling 24kHz to 48kHz.
 Uses NovaSR neural network (16kHz -> 48kHz) with pre-downsampling from 24kHz.
 """
 
+import sys
+from pathlib import Path
+from typing import Optional
+
+import numpy as np
 import torch
 import torchaudio.transforms as T
-import numpy as np
-from typing import Optional
-from pathlib import Path
-import sys
 
 BASE = Path(__file__).parent
 sys.path.insert(0, str(BASE))
@@ -87,7 +88,5 @@ class NovaSRUpsampler:
 
         return upsampled.cpu().float().numpy()
 
-    def upsample_chunks(
-        self, audio_chunk: np.ndarray, sample_rate: int = 24000
-    ) -> np.ndarray:
+    def upsample_chunks(self, audio_chunk: np.ndarray, sample_rate: int = 24000) -> np.ndarray:
         return self.upsample(audio_chunk, sample_rate)

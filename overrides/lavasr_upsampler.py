@@ -4,12 +4,13 @@ Uses LavaSR neural network for high-quality bandwidth extension.
 Supports direct 24kHz input (no downsampling needed).
 """
 
+import sys
+from pathlib import Path
+from typing import Optional, Union
+
+import numpy as np
 import torch
 import torchaudio.transforms as T
-import numpy as np
-from typing import Optional, Union
-from pathlib import Path
-import sys
 
 BASE = Path(__file__).parent
 sys.path.insert(0, str(BASE))
@@ -41,9 +42,7 @@ class LavaSRUpsampler:
             return
 
         try:
-            print(
-                f"[LavaSR] Initializing neural upsampler (24kHz -> 48kHz) on {self.device}..."
-            )
+            print(f"[LavaSR] Initializing neural upsampler (24kHz -> 48kHz) on {self.device}...")
 
             self._upsampler = T.Resample(
                 orig_freq=self.input_sr,
@@ -55,14 +54,12 @@ class LavaSRUpsampler:
 
             model_path = snapshot_download("YatharthS/LavaSR")
 
-            self._bwe_model = LavaBWE(
-                f"{model_path}/enhancer_v2", device=str(self.device)
-            )
+            self._bwe_model = LavaBWE(f"{model_path}/enhancer_v2", device=str(self.device))
             self._bwe_model.lr_refiner = FastLRMerge(
                 device=str(self.device), cutoff=self.input_sr // 2, transition_bins=1024
             )
 
-            print(f"[LavaSR] Model loaded successfully")
+            print("[LavaSR] Model loaded successfully")
 
         except Exception as e:
             print(f"[LavaSR] Error during initialization: {e}")

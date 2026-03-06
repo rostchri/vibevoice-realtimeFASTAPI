@@ -3,10 +3,11 @@ FlashSR audio super-resolution integration for upsampling 24kHz to 48kHz.
 Provides ultra-fast audio upsampling using torchaudio on GPU.
 """
 
+from typing import Optional
+
+import numpy as np
 import torch
 import torchaudio.transforms as T
-import numpy as np
-from typing import Optional
 
 
 class FlashSRUpsampler:
@@ -84,9 +85,7 @@ class FlashSRUpsampler:
         # Back to numpy
         return upsampled_tensor.squeeze(0).cpu().numpy()
 
-    def upsample_chunks(
-        self, audio_chunk: np.ndarray, sample_rate: int = 24000
-    ) -> np.ndarray:
+    def upsample_chunks(self, audio_chunk: np.ndarray, sample_rate: int = 24000) -> np.ndarray:
         """
         Upsample a single audio chunk for streaming.
 

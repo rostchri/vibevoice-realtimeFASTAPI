@@ -9,6 +9,9 @@ wheels/
 # Virtual environments
 .venv
 
+# Python version (local environment setting)
+.python-version
+
 # Downloaded models (large files)
 models/
 

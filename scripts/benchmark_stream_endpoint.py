@@ -22,7 +22,6 @@ from urllib.parse import urlencode, urlparse, urlunparse
 import websockets
 from websockets.exceptions import ConnectionClosed
 
-
 DEFAULT_TEXTS = [
     "Hello, this is a deterministic realtime streaming benchmark.",
     "We measure time to first audio, chunk pacing, and overall real-time factor.",
@@ -127,9 +126,7 @@ async def run_single_benchmark(
                         if event_name:
                             events[event_name] = events.get(event_name, 0) + 1
                     except json.JSONDecodeError:
-                        events["invalid_log_payload"] = (
-                            events.get("invalid_log_payload", 0) + 1
-                        )
+                        events["invalid_log_payload"] = events.get("invalid_log_payload", 0) + 1
     except Exception:
         raise
 
@@ -159,9 +156,7 @@ async def run_single_benchmark(
 def print_summary(summary: Dict[str, float]) -> None:
     print("\n=== /stream benchmark summary ===")
     print(f"runs: {int(summary['runs'])}")
-    print(
-        f"ttfa avg/p95: {summary['ttfa_avg_ms']:.2f} / {summary['ttfa_p95_ms']:.2f} ms"
-    )
+    print(f"ttfa avg/p95: {summary['ttfa_avg_ms']:.2f} / {summary['ttfa_p95_ms']:.2f} ms")
     print(
         f"chunk interval avg/p95: {summary['chunk_interval_avg_ms']:.2f} / {summary['chunk_interval_p95_ms']:.2f} ms"
     )
@@ -244,9 +239,7 @@ async def run(args: argparse.Namespace) -> int:
 
     ttfa_values = [float(cast(float, entry["ttfa_ms"])) for entry in runs]
     rtf_values = [float(cast(float, entry["rtf"])) for entry in runs]
-    audio_duration_values = [
-        float(cast(float, entry["audio_duration_s"])) for entry in runs
-    ]
+    audio_duration_values = [float(cast(float, entry["audio_duration_s"])) for entry in runs]
     all_intervals: List[float] = []
     for entry in runs:
         all_intervals.extend(cast(List[float], entry["chunk_intervals_ms"]))
@@ -255,9 +248,7 @@ async def run(args: argparse.Namespace) -> int:
         "runs": float(len(runs)),
         "ttfa_avg_ms": statistics.mean(ttfa_values),
         "ttfa_p95_ms": percentile(ttfa_values, 95),
-        "chunk_interval_avg_ms": statistics.mean(all_intervals)
-        if all_intervals
-        else math.nan,
+        "chunk_interval_avg_ms": statistics.mean(all_intervals) if all_intervals else math.nan,
         "chunk_interval_p95_ms": percentile(all_intervals, 95),
         "rtf_avg": statistics.mean(rtf_values),
         "rtf_p95": percentile(rtf_values, 95),

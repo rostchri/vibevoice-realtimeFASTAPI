@@ -4,6 +4,7 @@ Download the VibeVoice-Realtime-0.5B model from Hugging Face.
 
 This mirrors the Colab notebook's snapshot_download step.
 """
+
 import argparse
 import os
 import sys
@@ -78,4 +79,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

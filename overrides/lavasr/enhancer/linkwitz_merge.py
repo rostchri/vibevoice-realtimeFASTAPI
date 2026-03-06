@@ -4,6 +4,7 @@
 
 import torch
 
+
 class FastLRMerge:
     def __init__(self, sample_rate=48000, cutoff=4000, transition_bins=256, device="cpu"):
         self.sample_rate = sample_rate
@@ -18,7 +19,7 @@ class FastLRMerge:
         x = torch.linspace(-1, 1, steps=transition_bins, device=device)
         t = (x + 1) / 2
         self.fade_template = (3 * t**2 - 2 * t**3).to(torch.complex64)
-      
+
     def _get_mask(self, n_bins, ndim):
         key = (n_bins, ndim)
         if key in self.mask_cache:
