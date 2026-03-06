@@ -23,6 +23,7 @@ uv.lock
 *.wav
 *.mp3
 *.opus
+vibevoice_server.log
 
 # Benchmark files for deprecated upsamplers
 benchmark_novasr.py

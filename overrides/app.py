@@ -87,8 +87,18 @@ class StreamingTTSService:
             device = "cpu"
         self.device = device
         self._torch_device = torch.device(device)
+        self.voice_presets = self._load_voice_presets()
+        preset_name = os.environ.get("VOICE_PRESET")
+        self.default_voice_key = self._determine_voice_key(preset_name)
+
+    def is_loaded(self) -> bool:
+        return self.processor is not None and self.model is not None
 
     def load(self) -> None:
+        if self.is_loaded():
+            print("[startup] StreamingTTSService already loaded")
+            return
+
         if self.device == "cuda":
             torch.backends.cuda.matmul.allow_tf32 = True
             torch.backends.cudnn.allow_tf32 = True
@@ -190,10 +200,8 @@ class StreamingTTSService:
             except Exception as e:
                 print(f"[startup] torch.compile failed: {e}, falling back to eager mode")
 
-        self.voice_presets = self._load_voice_presets()
-        preset_name = os.environ.get("VOICE_PRESET")
-        self.default_voice_key = self._determine_voice_key(preset_name)
-        self._ensure_voice_cached(self.default_voice_key)
+        if self.default_voice_key is not None:
+            self._ensure_voice_cached(self.default_voice_key)
 
         # Initialize FlashSR upsampler
         if self.enable_flashsr:
@@ -353,6 +361,8 @@ class StreamingTTSService:
         prefilled_outputs,
         stop_event: threading.Event,
     ) -> None:
+        assert self.model is not None
+        assert self.processor is not None
         try:
             if self._compute_stream:
                 with torch.cuda.stream(self._compute_stream):
@@ -552,6 +562,24 @@ class StreamingTTSService:
 app = FastAPI()
 
 
+async def ensure_service_loaded() -> StreamingTTSService:
+    service: StreamingTTSService = app.state.tts_service
+    if service.is_loaded():
+        return service
+
+    init_lock: asyncio.Lock = app.state.service_init_lock
+    async with init_lock:
+        if service.is_loaded():
+            return service
+
+        started_at = time.perf_counter()
+        print("[startup] Lazy load triggered; loading model on demand")
+        await asyncio.to_thread(service.load)
+        elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+        print(f"[startup] Lazy load complete in {elapsed_ms:.1f} ms")
+        return service
+
+
 @app.on_event("startup")
 async def _startup() -> None:
     model_path = os.environ.get("MODEL_PATH")
@@ -567,6 +595,18 @@ async def _startup() -> None:
         "ENABLE_LAVASR", os.environ.get("ENABLE_FLASHSR", "true")
     ).lower()
     enable_flashsr = enable_flashsr_str in ("true", "1", "yes", "on")
+    enable_lazy_load = os.environ.get("ENABLE_LAZY_LOAD", "false").lower() in (
+        "true",
+        "1",
+        "yes",
+        "on",
+    )
+    enable_warmup = os.environ.get("ENABLE_STARTUP_WARMUP", "true").lower() in (
+        "true",
+        "1",
+        "yes",
+        "on",
+    )
 
     service = StreamingTTSService(
         model_path=model_path,
@@ -574,23 +614,26 @@ async def _startup() -> None:
         inference_steps=inference_steps,
         enable_flashsr=enable_flashsr,
     )
-    service.load()
 
-    enable_warmup = os.environ.get("ENABLE_STARTUP_WARMUP", "true").lower() in (
-        "true",
-        "1",
-        "yes",
-        "on",
-    )
+    app.state.tts_service = service
+    app.state.model_path = model_path
+    app.state.device = device
+    app.state.lazy_load_enabled = enable_lazy_load
+    app.state.websocket_lock = asyncio.Lock()
+    app.state.service_init_lock = asyncio.Lock()
+
+    if enable_lazy_load:
+        if enable_warmup:
+            print("[startup] ENABLE_STARTUP_WARMUP ignored because ENABLE_LAZY_LOAD is enabled")
+        print("[startup] Lazy load enabled; model will initialize on first speech request.")
+        return
+
+    service.load()
     if enable_warmup:
         service.warmup()
     else:
         print("[startup] Warmup disabled")
 
-    app.state.tts_service = service
-    app.state.model_path = model_path
-    app.state.device = device
-    app.state.websocket_lock = asyncio.Lock()
     print("[startup] Model ready.")
 
 
@@ -623,7 +666,7 @@ async def websocket_stream(ws: WebSocket) -> None:
         inference_steps = None
     temperature, do_sample = parse_temperature(temp_param)
 
-    service: StreamingTTSService = app.state.tts_service
+    service = await ensure_service_loaded()
     lock: asyncio.Lock = app.state.websocket_lock
 
     if lock.locked():
@@ -746,7 +789,7 @@ class OpenAISpeechRequest(BaseModel):
 
 @app.post("/v1/audio/speech")
 async def openai_speech(request: OpenAISpeechRequest):
-    service: StreamingTTSService = app.state.tts_service
+    service = await ensure_service_loaded()
     lock: asyncio.Lock = app.state.websocket_lock
 
     async with lock:
@@ -837,6 +880,23 @@ def get_voices():
 @app.get("/")
 def index():
     return FileResponse(BASE / "index.html")
+
+
+@app.get("/web")
+@app.get("/web/")
+def web_index():
+    return FileResponse(BASE / "index.html")
+
+
+@app.get("/health")
+def health():
+    service: StreamingTTSService = app.state.tts_service
+    return {
+        "status": "ok",
+        "lazy_load": app.state.lazy_load_enabled,
+        "model_loaded": service.is_loaded(),
+        "default_voice": service.default_voice_key,
+    }
 
 
 @app.get("/config")

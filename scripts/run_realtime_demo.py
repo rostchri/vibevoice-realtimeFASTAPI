@@ -30,6 +30,12 @@ def detect_device():
 def main():
     parser = argparse.ArgumentParser(description="Run VibeVoice realtime demo server locally")
     parser.add_argument(
+        "--host",
+        type=str,
+        default="0.0.0.0",
+        help="Host/interface to bind the server to (default: 0.0.0.0)",
+    )
+    parser.add_argument(
         "--port",
         type=int,
         default=8000,
@@ -58,6 +64,24 @@ def main():
         type=int,
         default=5,
         help="Number of inference steps (default: 5)",
+    )
+    parser.add_argument(
+        "--lazy-load",
+        action="store_true",
+        help="Defer model initialization until the first speech request",
+    )
+    parser.add_argument(
+        "--startup-warmup",
+        dest="startup_warmup",
+        action="store_true",
+        default=None,
+        help="Warm the model during startup",
+    )
+    parser.add_argument(
+        "--no-startup-warmup",
+        dest="startup_warmup",
+        action="store_false",
+        help="Skip startup warmup",
     )
     args = parser.parse_args()
 
@@ -151,12 +175,22 @@ def main():
     # Set environment variables (as the demo script expects)
     os.environ["MODEL_PATH"] = str(model_path)
     os.environ["MODEL_DEVICE"] = device
+    if args.lazy_load:
+        os.environ["ENABLE_LAZY_LOAD"] = "true"
+    if args.startup_warmup is not None:
+        os.environ["ENABLE_STARTUP_WARMUP"] = "true" if args.startup_warmup else "false"
+    elif args.lazy_load:
+        os.environ["ENABLE_STARTUP_WARMUP"] = "false"
 
     print("🚀 Starting VibeVoice realtime demo server...")
     print(f"   Model: {model_path}")
     print(f"   Device: {device}")
+    print(f"   Host: {args.host}")
     print(f"   Port: {args.port}")
-    print(f"\n🌐 Server running at: http://0.0.0.0:{args.port}")
+    print(f"   Lazy load: {'enabled' if args.lazy_load else 'disabled'}")
+    if args.startup_warmup is not None:
+        print(f"   Startup warmup: {'enabled' if args.startup_warmup else 'disabled'}")
+    print(f"\n🌐 Server running at: http://{args.host}:{args.port}")
     print(f"   Local access: http://127.0.0.1:{args.port}")
     print("   Press Ctrl+C to stop the server\n")
 
@@ -164,6 +198,8 @@ def main():
     cmd = [
         sys.executable,
         str(demo_script),
+        "--host",
+        args.host,
         "--port",
         str(args.port),
         "--model_path",
@@ -173,6 +209,10 @@ def main():
         "--inference_steps",
         str(args.inference_steps),
     ]
+    if args.lazy_load:
+        cmd.append("--lazy-load")
+    if args.startup_warmup is not None:
+        cmd.append("--startup-warmup" if args.startup_warmup else "--no-startup-warmup")
     if args.reload:
         cmd.append("--reload")
 

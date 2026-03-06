@@ -52,12 +52,12 @@
     uv run python scripts/run_realtime_demo.py --port 8000
     ```
 
-    - **Web UI**: Open [http://127.0.0.1:8000](http://127.0.0.1:8000)
+    - **Web UI**: Open [http://127.0.0.1:8000/web](http://127.0.0.1:8000/web)
     - **API**: `http://127.0.0.1:8000/v1/audio/speech`
 
 ### 🌐 Frontpage Controls (Web UI)
 
-The frontpage at `/` is fully connected to backend endpoints and exposes:
+The frontpage at `/web` (also available at `/`) is fully connected to backend endpoints and exposes:
 
 - **Model selection** (`tts-1`, `tts-1-hd`) for OpenAI-compatible requests
 - **Voice selection** from `GET /config` and `GET /v1/audio/voices`
@@ -122,6 +122,12 @@ curl http://127.0.0.1:8000/v1/audio/voices
   ]
 }
 ```
+
+### ❤️ Health Check
+
+**Endpoint**: `GET /health`
+
+Returns basic service readiness information, including whether lazy loading is enabled and whether the model has already been initialized.
 
 ## ⚙️ Configuration
 
@@ -217,6 +223,17 @@ CUDA_VISIBLE_DEVICES=2 uv run python third_party/VibeVoice/demo/vibevoice_realti
 ```
 
 **Note:** Replace `CUDA_VISIBLE_DEVICES=2` with your available GPU. Check GPU availability with `nvidia-smi`.
+
+### Boot Autostart with Lazy Load
+
+To install a systemd service that binds on all interfaces, listens on port `8881`, and defers model initialization until the first speech request:
+
+```bash
+CUDA_VISIBLE_DEVICES=3 HOST=0.0.0.0 PORT=8881 ./scripts/install_systemd_service.sh
+sudo systemctl start vibevoice-realtime.service
+```
+
+This exposes the UI at `http://<your-host>:8881/web`, keeps the OpenAI-compatible API under `/v1/...`, and sets `ENABLE_LAZY_LOAD=true` with `ENABLE_STARTUP_WARMUP=false` for fast boot-time startup. Adjust `CUDA_VISIBLE_DEVICES` if you want to pin the service to a different GPU.
 
 ### Restarting with New Code
 
