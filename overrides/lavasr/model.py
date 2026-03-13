@@ -21,7 +21,6 @@ class LavaEnhance:
 
     def enhance(self, wav, enhance=True, denoise=True, batch=False):
         pad_size = 0
-        low_quality_audio = wav
 
         if batch:
             wav, pad_size = wav_to_1s_batches(wav, 16000)
@@ -44,7 +43,7 @@ class LavaEnhance:
     def load_audio(self, file_path, input_sr=16000, duration=10000, cutoff=None):
         x = load_wav(file_path, resample_to=input_sr, duration=duration).to(self.device)
 
-        if cutoff == None:
+        if cutoff is None:
             cutoff = input_sr // 2
 
         self.bwe_model.lr_refiner = FastLRMerge(

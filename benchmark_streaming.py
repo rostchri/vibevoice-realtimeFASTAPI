@@ -6,9 +6,9 @@ Benchmark LavaSR with realistic TTS chunk sizes (streaming scenario)
 import os
 import sys
 import time
+
 import numpy as np
 import torch
-import torchaudio
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -82,7 +82,7 @@ def benchmark_streaming_chunks():
         )
 
     print("=" * 70)
-    print(f"\nSummary:")
+    print("\nSummary:")
     print(f"  Average RTF: {np.mean([r['rtf'] for r in results]):.4f}x")
     print(f"  Average Speed: {np.mean([r['speed'] for r in results]):.0f}x realtime")
 

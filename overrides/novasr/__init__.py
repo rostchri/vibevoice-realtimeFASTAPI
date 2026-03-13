@@ -2,7 +2,6 @@ import os
 
 import torch
 import torchaudio
-from torch.nn.utils import weight_norm
 
 from .speechsr import SynthesizerTrn
 
@@ -29,7 +28,7 @@ class FastSR:
 
         self.half = False
         self.model = self._load_model(ckpt_path).eval().float()
-        if half == True:
+        if half:
             self.half = True
             self.model.half()
 
@@ -56,7 +55,7 @@ class FastSR:
             .unsqueeze(1)
             .to(self.device)
         )
-        if self.half == True:
+        if self.half:
             lowres_wav = lowres_wav.half()
         return lowres_wav
 

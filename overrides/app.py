@@ -16,7 +16,7 @@ import scipy.io.wavfile
 import torch
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import FileResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from pydub import AudioSegment
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 from vibevoice.modular.modeling_vibevoice_streaming_inference import (
@@ -38,8 +38,7 @@ DEFAULT_TEMPERATURE = 0.9
 
 def get_timestamp():
     timestamp = (
-        datetime.datetime.utcnow()
-        .replace(tzinfo=datetime.timezone.utc)
+        datetime.datetime.now(datetime.timezone.utc)
         .astimezone(datetime.timezone(datetime.timedelta(hours=8)))
         .strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
     )
@@ -73,6 +72,7 @@ class StreamingTTSService:
         self.voice_presets: Dict[str, Path] = {}
         self.default_voice_key: Optional[str] = None
         self._voice_cache: Dict[str, object] = {}
+        self._voice_cache_lock = threading.Lock()
         self.flashsr: Optional[LavaSRUpsampler] = None
 
         self._compute_stream: Optional[torch.cuda.Stream] = None
@@ -296,16 +296,20 @@ class StreamingTTSService:
         if key not in self.voice_presets:
             raise RuntimeError(f"Voice preset {key!r} not found")
 
-        if key not in self._voice_cache:
-            preset_path = self.voice_presets[key]
-            print(f"[startup] Loading voice preset {key} from {preset_path}")
-            print(f"[startup] Loading prefilled prompt from {preset_path}")
-            prefilled_outputs = torch.load(
-                preset_path,
-                map_location=self._torch_device,
-                weights_only=False,
-            )
-            self._voice_cache[key] = prefilled_outputs
+        if key in self._voice_cache:
+            return self._voice_cache[key]
+
+        with self._voice_cache_lock:
+            if key not in self._voice_cache:
+                preset_path = self.voice_presets[key]
+                print(f"[startup] Loading voice preset {key} from {preset_path}")
+                print(f"[startup] Loading prefilled prompt from {preset_path}")
+                prefilled_outputs = torch.load(
+                    preset_path,
+                    map_location=self._torch_device,
+                    weights_only=False,
+                )
+                self._voice_cache[key] = prefilled_outputs
 
         return self._voice_cache[key]
 
@@ -380,7 +384,7 @@ class StreamingTTSService:
                         stop_check_fn=stop_event.is_set,
                         verbose=False,
                         refresh_negative=refresh_negative,
-                        all_prefilled_outputs=copy.deepcopy(prefilled_outputs),
+                        all_prefilled_outputs=copy.copy(prefilled_outputs),
                     )
             else:
                 self.model.generate(
@@ -397,7 +401,7 @@ class StreamingTTSService:
                     stop_check_fn=stop_event.is_set,
                     verbose=False,
                     refresh_negative=refresh_negative,
-                    all_prefilled_outputs=copy.deepcopy(prefilled_outputs),
+                    all_prefilled_outputs=copy.copy(prefilled_outputs),
                 )
         except Exception as exc:  # pragma: no cover - diagnostic logging
             errors.append(exc)
@@ -491,13 +495,8 @@ class StreamingTTSService:
                         if tensor_chunk.ndim > 1:
                             tensor_chunk = tensor_chunk.reshape(-1)
 
-                        peak = (
-                            float(torch.max(torch.abs(tensor_chunk)).item())
-                            if tensor_chunk.numel()
-                            else 0.0
-                        )
-                        if peak > 1.0:
-                            tensor_chunk = tensor_chunk / peak
+                        # Clamp on-device to avoid GPU→CPU sync per chunk
+                        tensor_chunk = tensor_chunk.clamp_(-1.0, 1.0)
 
                         if self.flashsr and self.flashsr.enabled:
                             audio_chunk = self.flashsr.upsample_chunks(
@@ -520,11 +519,8 @@ class StreamingTTSService:
                         if audio_chunk.ndim > 1:
                             audio_chunk = audio_chunk.reshape(-1)
 
-                        peak = np.max(np.abs(audio_chunk)) if audio_chunk.size else 0.0
-                        if peak > 1.0:
-                            audio_chunk = audio_chunk / peak
+                        np.clip(audio_chunk, -1.0, 1.0, out=audio_chunk)
 
-                        # Apply LavaSR upsampling if enabled
                         if self.flashsr and self.flashsr.enabled:
                             audio_chunk = self.flashsr.upsample_chunks(
                                 audio_chunk, sample_rate=self.sample_rate
@@ -539,7 +535,7 @@ class StreamingTTSService:
             finally:
                 # Ensure this sentence's stream is closed
                 audio_streamer.end()
-                thread.join()
+                thread.join(timeout=30)
 
                 if errors:
                     # Decide if we want to stop strictly on error or continue to next sentence
@@ -780,9 +776,9 @@ async def websocket_stream(ws: WebSocket) -> None:
 
 class OpenAISpeechRequest(BaseModel):
     model: str = "tts-1"
-    input: str
+    input: str = Field(..., min_length=1, max_length=100_000)
     voice: Optional[str] = None
-    response_format: Optional[str] = "opus"  # Default to opus
+    response_format: Optional[str] = Field("opus", pattern=r"^(opus|wav|mp3)$")
     speed: Optional[float] = 1.0
     temp: Optional[float] = None
 
