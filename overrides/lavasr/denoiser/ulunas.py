@@ -368,7 +368,7 @@ class GRNN(nn.Module):
         x: (B, seq_length, input_size)
         h: (num_layers, B, hidden_size)
         """
-        if h == None:
+        if h is None:
             if self.bidirectional:
                 h = torch.zeros(self.num_layers * 2, x.shape[0], self.hidden_size, device=x.device)
             else:

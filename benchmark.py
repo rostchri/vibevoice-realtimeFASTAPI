@@ -4,14 +4,14 @@ Benchmark VibeVoice TTS performance - measures RTF (Real-Time Factor)
 RTF < 1.0 means faster than realtime
 """
 
+import argparse
+import copy
 import os
 import sys
 import time
-import argparse
+
 import numpy as np
 import torch
-import copy
-import asyncio
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "third_party/VibeVoice"))
 
@@ -90,7 +90,7 @@ def benchmark_tts(
     warmup: bool = True,
 ):
     print(f"\n{'=' * 60}")
-    print(f"VibeVoice TTS Benchmark")
+    print("VibeVoice TTS Benchmark")
     print(f"{'=' * 60}")
     print(f"Device: {device}")
     print(f"Model: {model_path}")
@@ -137,12 +137,12 @@ def benchmark_tts(
     )
     voice_path = os.path.join(voices_dir, "en-Carter_man.pt")
 
-    print(f"[3/4] Loading voice preset...")
+    print("[3/4] Loading voice preset...")
     t0 = time.time()
     prefilled_outputs = torch.load(voice_path, map_location=device, weights_only=False)
     print(f"      Done in {time.time() - t0:.2f}s")
 
-    print(f"[4/4] Preparing inputs...")
+    print("[4/4] Preparing inputs...")
     t0 = time.time()
     inputs = processor.process_input_with_cached_prompt(
         text=text,
@@ -226,7 +226,7 @@ def benchmark_tts(
                 f"          RTF:      {rtf:.3f}x {'✓ FASTER THAN REALTIME' if rtf < 1 else ''}"
             )
         else:
-            print(f"          ERROR: No audio generated")
+            print("          ERROR: No audio generated")
 
         print()
 
@@ -237,7 +237,7 @@ def benchmark_tts(
         std_rtf = np.std([r["rtf"] for r in results])
 
         print(f"{'=' * 60}")
-        print(f"BENCHMARK RESULTS")
+        print("BENCHMARK RESULTS")
         print(f"{'=' * 60}")
         print(
             f"Average Generation Time: {avg_gen_time:.3f}s ± {np.std([r['gen_time'] for r in results]):.3f}s"

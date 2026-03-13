@@ -70,7 +70,7 @@ VALID_UNITS = {
     "min": "minutes",
     "h": "hour",
     "l": "liter",
-    "ml": "mililiter",
+    "ml": "milliliter",
     "cl": "centiliter",
     "dl": "deciliter",
     "kph": "kilometer per hour",
@@ -78,10 +78,10 @@ VALID_UNITS = {
     "mi/h": "mile per hour",
     "m/s": "meter per second",
     "km/h": "kilometer per hour",
-    "mm/s": "milimeter per second",
+    "mm/s": "millimeter per second",
     "cm/s": "centimeter per second",
     "ft/s": "feet per second",
-    "cm/h": "centimeter per day",
+    "cm/h": "centimeter per hour",
     "°c": "degree celsius",
     "c": "degree celsius",
     "°f": "degree fahrenheit",
@@ -97,9 +97,9 @@ VALID_UNITS = {
     "ghz": "gigahertz",
     "v": "volt",
     "kv": "kilovolt",
-    "mv": "mergavolt",
+    "mv": "megavolt",
     "a": "amp",
-    "ma": "megaamp",
+    "ma": "milliamp",
     "ka": "kiloamp",
     "w": "watt",
     "kw": "kilowatt",
@@ -110,7 +110,6 @@ VALID_UNITS = {
     "Ω": "ohm",
     "kΩ": "kiloohm",
     "mΩ": "megaohm",
-    "f": "farad",
     "µf": "microfarad",
     "nf": "nanofarad",
     "pf": "picofarad",
@@ -218,7 +217,7 @@ def handle_numbers(n: re.Match[str]) -> str:
     number = n.group(2)
     try:
         number = float(number)
-    except:
+    except (TypeError, ValueError):
         return n.group()
     if n.group(1) == "-":
         number *= -1
@@ -237,7 +236,7 @@ def handle_money(m: re.Match[str]) -> str:
     number = m.group(3)
     try:
         number = float(number)
-    except:
+    except (TypeError, ValueError):
         return m.group()
     if m.group(1) == "-":
         number *= -1
