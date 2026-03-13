@@ -34,6 +34,7 @@ BASE = Path(__file__).parent
 SAMPLE_RATE = 24_000
 UPSAMPLED_RATE = 48_000
 DEFAULT_TEMPERATURE = 0.9
+MAX_INPUT_LENGTH = 100_000
 
 
 def get_timestamp():
@@ -496,7 +497,7 @@ class StreamingTTSService:
                             tensor_chunk = tensor_chunk.reshape(-1)
 
                         # Clamp on-device to avoid GPU→CPU sync per chunk
-                        tensor_chunk = tensor_chunk.clamp_(-1.0, 1.0)
+                        tensor_chunk.clamp_(-1.0, 1.0)
 
                         if self.flashsr and self.flashsr.enabled:
                             audio_chunk = self.flashsr.upsample_chunks(
@@ -776,7 +777,7 @@ async def websocket_stream(ws: WebSocket) -> None:
 
 class OpenAISpeechRequest(BaseModel):
     model: str = "tts-1"
-    input: str = Field(..., min_length=1, max_length=100_000)
+    input: str = Field(..., min_length=1, max_length=MAX_INPUT_LENGTH)
     voice: Optional[str] = None
     response_format: Optional[str] = Field("opus", pattern=r"^(opus|wav|mp3)$")
     speed: Optional[float] = 1.0
