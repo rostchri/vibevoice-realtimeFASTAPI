@@ -385,7 +385,7 @@ class StreamingTTSService:
                         stop_check_fn=stop_event.is_set,
                         verbose=False,
                         refresh_negative=refresh_negative,
-                        all_prefilled_outputs=copy.copy(prefilled_outputs),
+                        all_prefilled_outputs=copy.deepcopy(prefilled_outputs),
                     )
             else:
                 self.model.generate(
@@ -402,7 +402,7 @@ class StreamingTTSService:
                     stop_check_fn=stop_event.is_set,
                     verbose=False,
                     refresh_negative=refresh_negative,
-                    all_prefilled_outputs=copy.copy(prefilled_outputs),
+                    all_prefilled_outputs=copy.deepcopy(prefilled_outputs),
                 )
         except Exception as exc:  # pragma: no cover - diagnostic logging
             errors.append(exc)
@@ -496,9 +496,6 @@ class StreamingTTSService:
                         if tensor_chunk.ndim > 1:
                             tensor_chunk = tensor_chunk.reshape(-1)
 
-                        # Clamp on-device to avoid GPU→CPU sync per chunk
-                        tensor_chunk.clamp_(-1.0, 1.0)
-
                         if self.flashsr and self.flashsr.enabled:
                             audio_chunk = self.flashsr.upsample_chunks(
                                 tensor_chunk, sample_rate=self.sample_rate
@@ -515,19 +512,19 @@ class StreamingTTSService:
                         else:
                             audio_chunk = tensor_chunk.to(device="cpu", dtype=torch.float32).numpy()
                     else:
-                        audio_chunk = np.asarray(audio_chunk, dtype=np.float32)
-
-                        if audio_chunk.ndim > 1:
-                            audio_chunk = audio_chunk.reshape(-1)
-
-                        np.clip(audio_chunk, -1.0, 1.0, out=audio_chunk)
-
                         if self.flashsr and self.flashsr.enabled:
                             audio_chunk = self.flashsr.upsample_chunks(
                                 audio_chunk, sample_rate=self.sample_rate
                             )
 
                     chunk_to_yield = np.asarray(audio_chunk, dtype=np.float32)
+                    if chunk_to_yield.ndim > 1:
+                        chunk_to_yield = chunk_to_yield.reshape(-1)
+
+                    peak = np.max(np.abs(chunk_to_yield)) if chunk_to_yield.size else 0.0
+                    if peak > 1.0:
+                        chunk_to_yield = chunk_to_yield / peak
+
                     yield chunk_to_yield
 
             except Exception as e:
