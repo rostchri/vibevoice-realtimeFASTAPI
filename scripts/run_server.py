@@ -133,7 +133,7 @@ def main() -> None:
     if isinstance(adapter, LongformNativeAdapter):
         if not adapter.is_available():
             print(f"❌ {profile.key} backend is not available.")
-            print(f"   {adapter._backend_error}")
+            print(f"   {adapter.get_backend_error()}")
             print("\n💡 A compatible long-form backend must be installed.")
             print("   See README for details.")
             sys.exit(1)

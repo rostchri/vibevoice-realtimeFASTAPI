@@ -48,8 +48,9 @@ class LongformNativeAdapter(EngineAdapter):
                   )
         """
         try:
-            # TODO: Replace with real long-form backend import
-            raise ImportError("No long-form backend available yet")
+            # TODO: Replace with real long-form backend import when available.
+            # This ImportError is intentional – no long-form backend exists yet.
+            raise ImportError("No long-form backend available yet – this is expected")
         except ImportError as exc:
             self._backend_error = str(exc)
             return False
@@ -74,6 +75,10 @@ class LongformNativeAdapter(EngineAdapter):
             return True
         except BackendUnavailableError:
             return False
+
+    def get_backend_error(self) -> str | None:
+        """Return the last backend loading error message, or ``None``."""
+        return self._backend_error
 
     def capabilities(self) -> dict[str, Any]:
         available = self.is_available()
