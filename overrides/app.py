@@ -4,6 +4,7 @@ import datetime
 import io
 import json
 import os
+import sys
 import threading
 import time
 import traceback
@@ -15,7 +16,7 @@ import numpy as np
 import scipy.io.wavfile
 import torch
 from fastapi import FastAPI, WebSocket
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 from pydub import AudioSegment
 from starlette.websockets import WebSocketDisconnect, WebSocketState
@@ -29,6 +30,31 @@ from vibevoice.processor.vibevoice_streaming_processor import (
 
 from .lavasr_upsampler import LavaSRUpsampler
 from .text_processing import normalize_text, split_text_into_sentences
+
+# ---------------------------------------------------------------------------
+# Runner-package imports (multi-model support)
+# ---------------------------------------------------------------------------
+# When app.py is copied into the vendored tree the runner package may not be on
+# sys.path.  We try to add the project root automatically.
+_APP_DIR = Path(__file__).resolve().parent
+_POSSIBLE_ROOT = _APP_DIR.parent.parent.parent  # demo/web -> demo -> VibeVoice -> project
+if (_POSSIBLE_ROOT / "runner").is_dir() and str(_POSSIBLE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_POSSIBLE_ROOT))
+
+try:
+    from runner.adapter_factory import make_adapter
+    from runner.errors import UnknownModelError
+    from runner.model_registry import (
+        DEFAULT_MODEL_KEY,
+        get_model_profile,
+        list_aliases,
+        list_model_keys,
+        resolve_model_key,
+    )
+
+    _RUNNER_AVAILABLE = True
+except ImportError:
+    _RUNNER_AVAILABLE = False
 
 BASE = Path(__file__).parent
 SAMPLE_RATE = 24_000
@@ -615,6 +641,7 @@ async def _startup() -> None:
     app.state.lazy_load_enabled = enable_lazy_load
     app.state.websocket_lock = asyncio.Lock()
     app.state.service_init_lock = asyncio.Lock()
+    app.state.active_model_key = os.environ.get("ACTIVE_MODEL_KEY", "realtime-0.5b")
 
     if enable_lazy_load:
         if enable_warmup:
@@ -640,6 +667,30 @@ def streaming_tts(text: str, **kwargs) -> Iterator[np.ndarray]:
 async def websocket_stream(ws: WebSocket) -> None:
     await ws.accept()
     text = ws.query_params.get("text", "")
+    model_param = ws.query_params.get("model")
+
+    # --- Reject non-realtime models on /stream ---
+    if _RUNNER_AVAILABLE and model_param:
+        try:
+            ws_model_key = resolve_model_key(model_param)
+            ws_profile = get_model_profile(ws_model_key)
+            if ws_profile.family != "realtime":
+                error_msg = {
+                    "type": "error",
+                    "error": {
+                        "message": (
+                            f"Model '{ws_model_key}' does not support WebSocket streaming. "
+                            "Only realtime models are supported on /stream."
+                        ),
+                        "type": "capability_error",
+                    },
+                }
+                await ws.send_text(json.dumps(error_msg))
+                await ws.close(code=1008, reason="Model does not support streaming")
+                return
+        except (UnknownModelError, Exception):
+            pass  # fall through to default realtime behaviour
+
     print(f"Client connected, text={text!r}")
     cfg_param = ws.query_params.get("cfg")
     steps_param = ws.query_params.get("steps")
@@ -779,10 +830,71 @@ class OpenAISpeechRequest(BaseModel):
     response_format: Optional[str] = Field("opus", pattern=r"^(opus|wav|mp3)$")
     speed: Optional[float] = 1.0
     temp: Optional[float] = None
+    speakers: Optional[list] = None
+
+
+def _resolve_and_validate_model(request: OpenAISpeechRequest) -> Tuple[str, Optional[JSONResponse]]:
+    """Resolve the requested model and validate compatibility.
+
+    Returns ``(model_key, error_response)``.  If *error_response* is not
+    ``None`` the caller should return it immediately.
+    """
+    if not _RUNNER_AVAILABLE:
+        # Runner package not loaded – fall through to realtime behaviour
+        return "realtime-0.5b", None
+
+    try:
+        model_key = resolve_model_key(request.model)
+    except UnknownModelError as exc:
+        return "", JSONResponse(
+            status_code=404,
+            content={"error": {"message": str(exc), "type": "unknown_model"}},
+        )
+
+    profile = get_model_profile(model_key)
+
+    # Reject speakers for realtime models
+    if profile.family == "realtime" and request.speakers:
+        return model_key, JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": (
+                        f"Model '{model_key}' does not support the 'speakers' field. "
+                        "Use a longform model (tts-1.5b, tts-7b) for multi-speaker dialogue."
+                    ),
+                    "type": "invalid_request",
+                }
+            },
+        )
+
+    # For longform models, check backend availability
+    if profile.family == "longform":
+        adapter = make_adapter(model_key)
+        if not adapter.is_available():
+            return model_key, JSONResponse(
+                status_code=501,
+                content={
+                    "error": {
+                        "message": (
+                            f"Model '{model_key}' is registered but no compatible "
+                            "long-form backend is installed/configured."
+                        ),
+                        "type": "backend_unavailable",
+                    }
+                },
+            )
+
+    return model_key, None
 
 
 @app.post("/v1/audio/speech")
 async def openai_speech(request: OpenAISpeechRequest):
+    # --- Model resolution & capability check ---
+    model_key, error_resp = _resolve_and_validate_model(request)
+    if error_resp is not None:
+        return error_resp
+
     service = await ensure_service_loaded()
     lock: asyncio.Lock = app.state.websocket_lock
 
@@ -885,19 +997,46 @@ def web_index():
 @app.get("/health")
 def health():
     service: StreamingTTSService = app.state.tts_service
-    return {
+    result: Dict[str, Any] = {
         "status": "ok",
         "lazy_load": app.state.lazy_load_enabled,
         "model_loaded": service.is_loaded(),
         "default_voice": service.default_voice_key,
     }
+    if _RUNNER_AVAILABLE:
+        active_key = getattr(app.state, "active_model_key", DEFAULT_MODEL_KEY)
+        try:
+            profile = get_model_profile(active_key)
+            result.update({
+                "active_model": active_key,
+                "family": profile.family,
+                "adapter": profile.loader_mode,
+            })
+        except Exception:
+            result["active_model"] = active_key
+    return result
 
 
 @app.get("/config")
 def get_config():
     service: StreamingTTSService = app.state.tts_service
     voices = sorted(service.voice_presets.keys())
-    return {
+    result: Dict[str, Any] = {
         "voices": voices,
         "default_voice": service.default_voice_key,
     }
+    if _RUNNER_AVAILABLE:
+        models_info: list[Dict[str, Any]] = []
+        for key in list_model_keys():
+            try:
+                adapter = make_adapter(key)
+                models_info.append(adapter.capabilities())
+            except Exception:
+                models_info.append({"model": key, "status": "error"})
+        result.update({
+            "available_models": list_model_keys(),
+            "default_model": DEFAULT_MODEL_KEY,
+            "aliases": list_aliases(),
+            "models": models_info,
+        })
+    return result

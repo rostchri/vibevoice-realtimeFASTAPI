@@ -37,6 +37,7 @@ dev = [
 # Prevent setuptools from trying to treat top-level folders like `models/` and `third_party/`
 # as importable packages when uv installs this project.
 py-modules = ["main"]
+packages = ["runner", "runner.adapters"]
 
 [tool.uv.sources]
 vibevoice = { path = "third_party/VibeVoice", editable = true }
