@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
 """
-Download the VibeVoice-Realtime-0.5B model from Hugging Face.
+Download a VibeVoice model from Hugging Face.
 
-This mirrors the Colab notebook's snapshot_download step.
+Supports multiple model profiles via the runner registry.
+
+Examples::
+
+    uv run python scripts/download_model.py
+    uv run python scripts/download_model.py --model realtime-0.5b
+    uv run python scripts/download_model.py --model tts-1.5b
+    uv run python scripts/download_model.py --model tts-7b
+    uv run python scripts/download_model.py --model tts-7b --model-id some/custom-repo
 """
 
 import argparse
@@ -10,24 +18,43 @@ import os
 import sys
 from pathlib import Path
 
-from huggingface_hub import snapshot_download
+# Ensure project root is on sys.path so ``runner`` is importable.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from runner.errors import UnknownModelError  # noqa: E402
+from runner.model_registry import (  # noqa: E402
+    get_model_profile,
+    list_model_keys,
+    resolve_model_key,
+)
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Download VibeVoice-Realtime model from Hugging Face"
+        description="Download a VibeVoice model from Hugging Face"
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="realtime-0.5b",
+        help=(
+            "Model key or alias (default: realtime-0.5b). "
+            f"Available: {', '.join(list_model_keys())}"
+        ),
     )
     parser.add_argument(
         "--model-id",
         type=str,
-        default="microsoft/VibeVoice-Realtime-0.5B",
-        help="Hugging Face model ID (default: microsoft/VibeVoice-Realtime-0.5B)",
+        default=None,
+        help="Override Hugging Face model ID (default: from registry)",
     )
     parser.add_argument(
         "--local-dir",
         type=str,
-        default="models/VibeVoice-Realtime-0.5B",
-        help="Local directory to save the model (default: models/VibeVoice-Realtime-0.5B)",
+        default=None,
+        help="Override local directory to save the model (default: from registry)",
     )
     parser.add_argument(
         "--token",
@@ -37,13 +64,22 @@ def main():
     )
     args = parser.parse_args()
 
+    # Resolve model
+    try:
+        model_key = resolve_model_key(args.model)
+    except UnknownModelError as exc:
+        print(f"❌ {exc}")
+        sys.exit(1)
+
+    profile = get_model_profile(model_key)
+
+    model_id = args.model_id or profile.hf_model_id
+    local_dir = Path(args.local_dir).resolve() if args.local_dir else Path(profile.default_local_dir).resolve()
+
     # Get token from args, env var, or None
     token = args.token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
 
-    local_dir = Path(args.local_dir).resolve()
-    model_id = args.model_id
-
-    print(f"📥 Downloading model: {model_id}")
+    print(f"📥 Downloading model: {model_id} (profile: {model_key})")
     print(f"📁 Destination: {local_dir}")
 
     # Check if model already exists
@@ -55,6 +91,8 @@ def main():
             return
 
     try:
+        from huggingface_hub import snapshot_download
+
         snapshot_download(
             repo_id=model_id,
             local_dir=str(local_dir),

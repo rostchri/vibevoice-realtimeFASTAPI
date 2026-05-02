@@ -7,10 +7,10 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.109-green?style=for-the-badge&logo=fastapi)
 ![OpenAI API](https://img.shields.io/badge/OpenAI_API-Compatible-orange?style=for-the-badge&logo=openai)
 
-**A high-performance local runner for Microsoft's VibeVoice Realtime text-to-speech model.**
-*Now with OpenAI-compatible API endpoints!*
+**A high-performance local runner for Microsoft's VibeVoice text-to-speech models.**
+*Now with OpenAI-compatible API endpoints and multi-model support!*
 
-[Features](#features) • [Quick Start](#quick-start) • [API Documentation](#api-documentation) • [Credits](#credits)
+[Features](#features) • [Quick Start](#quick-start) • [Multi-Model Support](#-multi-model-support) • [API Documentation](#api-documentation) • [Credits](#credits)
 
 </div>
 
@@ -20,8 +20,9 @@
 
 - **Local & Private**: Runs entirely on your machine (CUDA/MPS/CPU).
 - **Realtime Streaming**: Low-latency text-to-speech generation.
+- **Multi-Model Support**: Registry for Realtime 0.5B, 1.5B, and 7B models.
 - **LavaSR Super-Resolution**: Neural audio upsampling (24kHz → 48kHz) at 300-500x realtime, enabled by default. Surpasses 6GB diffusion models in quality.
-- **OpenAI API Compatible**: Drop-in replacement for OpenAI's TTS API.
+- **OpenAI API Compatible**: Drop-in replacement for OpenAI's TTS API with model selection.
 - **Multiple Audio Formats**: Supports Opus (default), WAV, and MP3 output.
 - **Web Interface**: Built-in interactive demo UI.
 - **Multi-Platform**: Optimized for Ubuntu (CUDA) and macOS (Apple Silicon).
@@ -42,18 +43,98 @@
     ./scripts/bootstrap_uv.sh
     ```
 
-2.  **Download the model**:
+2.  **Download a model**:
     ```bash
+    # Default: Realtime 0.5B (fully supported)
     uv run python scripts/download_model.py
+
+    # Or specify a model explicitly
+    uv run python scripts/download_model.py --model realtime-0.5b
+    uv run python scripts/download_model.py --model tts-1.5b
+    uv run python scripts/download_model.py --model tts-7b
     ```
 
 3.  **Run the server**:
     ```bash
+    # Using the generic launcher
+    uv run python scripts/run_server.py --model realtime-0.5b --port 8000
+
+    # Or the backward-compatible script
     uv run python scripts/run_realtime_demo.py --port 8000
     ```
 
     - **Web UI**: Open [http://127.0.0.1:8000/web](http://127.0.0.1:8000/web)
     - **API**: `http://127.0.0.1:8000/v1/audio/speech`
+
+## 🧩 Multi-Model Support
+
+This runner supports multiple VibeVoice model families through a unified registry and adapter layer.
+
+### Supported Models
+
+| Model Key | HF Model ID | Family | Status | Streaming | Multi-Speaker |
+|:---|:---|:---|:---|:---|:---|
+| `realtime-0.5b` | `microsoft/VibeVoice-Realtime-0.5B` | Realtime | ✅ Fully supported | ✅ | ❌ |
+| `tts-1.5b` | `microsoft/VibeVoice-1.5B` | Longform | 🔧 Registry + API ready | ❌ | ✅ |
+| `tts-7b` | `microsoft/VibeVoice-7B` | Longform | 🔧 Registry + API ready | ❌ | ✅ |
+
+### Model Aliases
+
+For backward compatibility and convenience, the following aliases are supported:
+
+| Alias | Resolves To |
+|:---|:---|
+| `tts-1` | `realtime-0.5b` |
+| `tts-1-hd` | `realtime-0.5b` |
+| `vibevoice-realtime-0.5b` | `realtime-0.5b` |
+| `vibevoice-1.5b` | `tts-1.5b` |
+| `vibevoice-7b` | `tts-7b` |
+
+### Model Selection in API Requests
+
+The `model` field in `/v1/audio/speech` requests is **no longer ignored**. It is resolved via the alias mapping and validated for capability:
+
+```bash
+# Uses realtime-0.5b (backward compatible)
+curl http://127.0.0.1:8000/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{"model": "tts-1", "input": "Hello!", "voice": "en-Carter_man"}'
+
+# Explicitly request realtime
+curl http://127.0.0.1:8000/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{"model": "realtime-0.5b", "input": "Hello!", "voice": "en-Carter_man"}'
+
+# Request a longform model (returns 501 if backend not installed)
+curl http://127.0.0.1:8000/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{"model": "tts-1.5b", "input": "Hello!"}'
+```
+
+### Error Responses
+
+| Status | Condition |
+|:---|:---|
+| **400** | Invalid request for model (e.g., `speakers` sent to a realtime model) |
+| **404** | Unknown model key/alias |
+| **501** | Known model but backend not installed |
+
+### Longform Model Status
+
+The `tts-1.5b` and `tts-7b` models are registered in the model registry with full API plumbing, but require a compatible long-form inference backend to be installed. When requested without a backend, the API returns a clear 501 error:
+
+```json
+{
+  "error": {
+    "message": "Model 'tts-1.5b' is registered but no compatible long-form backend is installed/configured.",
+    "type": "backend_unavailable"
+  }
+}
+```
+
+### WebSocket Streaming (`/stream`)
+
+The `/stream` WebSocket endpoint is **realtime-only**. Longform models are not supported on this endpoint and will be rejected with an error message.
 
 ### 🌐 Frontpage Controls (Web UI)
 
@@ -90,12 +171,13 @@ curl http://127.0.0.1:8000/v1/audio/speech \
 
 | Parameter | Type | Description |
 | :--- | :--- | :--- |
-| `model` | `string` | Model identifier (e.g., `tts-1`). Ignored but required for compatibility. |
+| `model` | `string` | Model identifier. Resolved via alias mapping (see [Multi-Model Support](#-multi-model-support)). Default: `tts-1` → `realtime-0.5b`. |
 | `input` | `string` | The text to generate audio for. |
 | `voice` | `string` | The voice ID to use (see `/v1/audio/voices`). |
 | `response_format` | `string` | Output format: `opus` (default, 48kHz), `wav`, or `mp3`. |
 | `temp` | `float` | Sampling temperature. When provided (>0), enables sampling with the given temperature. |
 | `speed` | `float` | Speed of generation (currently ignored). |
+| `speakers` | `list` | Multi-speaker dialogue turns (longform models only). |
 
 ### 🎤 List Voices
 
@@ -127,7 +209,13 @@ curl http://127.0.0.1:8000/v1/audio/voices
 
 **Endpoint**: `GET /health`
 
-Returns basic service readiness information, including whether lazy loading is enabled and whether the model has already been initialized.
+Returns service readiness information including lazy loading status, active model, and adapter type.
+
+### ⚙️ Server Configuration
+
+**Endpoint**: `GET /config`
+
+Returns available voices, models, aliases, and per-model capabilities.
 
 ## ⚙️ Configuration
 
