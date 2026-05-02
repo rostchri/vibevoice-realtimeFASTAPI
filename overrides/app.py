@@ -830,7 +830,7 @@ class OpenAISpeechRequest(BaseModel):
     model: str = "tts-1"
     # Optional at the schema level so longform models can accept speakers-only
     # requests; family-specific validation below rejects blank input where needed.
-    input: Optional[str] = Field(None, max_length=MAX_INPUT_LENGTH)
+    input: Optional[str] = Field(None, min_length=1, max_length=MAX_INPUT_LENGTH)
     voice: Optional[str] = None
     response_format: Optional[str] = Field("opus", pattern=r"^(opus|wav|mp3)$")
     speed: Optional[float] = 1.0
