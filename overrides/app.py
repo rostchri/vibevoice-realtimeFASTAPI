@@ -35,11 +35,14 @@ from .text_processing import normalize_text, split_text_into_sentences
 # Runner-package imports (multi-model support)
 # ---------------------------------------------------------------------------
 # When app.py is copied into the vendored tree the runner package may not be on
-# sys.path.  We try to add the project root automatically.
+# sys.path.  Walk upwards and add the first parent that contains the runner
+# package so both local overrides/ and vendored demo/web/ copies work.
 _APP_DIR = Path(__file__).resolve().parent
-_POSSIBLE_ROOT = _APP_DIR.parent.parent.parent  # demo/web -> demo -> VibeVoice -> project
-if (_POSSIBLE_ROOT / "runner").is_dir() and str(_POSSIBLE_ROOT) not in sys.path:
-    sys.path.insert(0, str(_POSSIBLE_ROOT))
+for _possible_root in (_APP_DIR, *_APP_DIR.parents):
+    if (_possible_root / "runner" / "model_registry.py").is_file():
+        if str(_possible_root) not in sys.path:
+            sys.path.insert(0, str(_possible_root))
+        break
 
 try:
     from runner.adapter_factory import make_adapter
@@ -825,12 +828,21 @@ async def websocket_stream(ws: WebSocket) -> None:
 
 class OpenAISpeechRequest(BaseModel):
     model: str = "tts-1"
-    input: str = Field(..., min_length=1, max_length=MAX_INPUT_LENGTH)
+    input: Optional[str] = Field(None, max_length=MAX_INPUT_LENGTH)
     voice: Optional[str] = None
     response_format: Optional[str] = Field("opus", pattern=r"^(opus|wav|mp3)$")
     speed: Optional[float] = 1.0
     temp: Optional[float] = None
     speakers: Optional[list] = None
+    stream: bool = False
+
+
+def _has_text(value: Optional[str]) -> bool:
+    return value is not None and value.strip() != ""
+
+
+def _has_speakers(value: Optional[list]) -> bool:
+    return value is not None and len(value) > 0
 
 
 def _resolve_and_validate_model(request: OpenAISpeechRequest) -> Tuple[str, Optional[JSONResponse]]:
@@ -853,8 +865,19 @@ def _resolve_and_validate_model(request: OpenAISpeechRequest) -> Tuple[str, Opti
 
     profile = get_model_profile(model_key)
 
+    if profile.family == "realtime" and not _has_text(request.input):
+        return model_key, JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": f"Model '{model_key}' requires the 'input' field.",
+                    "type": "invalid_request",
+                }
+            },
+        )
+
     # Reject speakers for realtime models
-    if profile.family == "realtime" and request.speakers:
+    if profile.family == "realtime" and _has_speakers(request.speakers):
         return model_key, JSONResponse(
             status_code=400,
             content={
@@ -870,6 +893,29 @@ def _resolve_and_validate_model(request: OpenAISpeechRequest) -> Tuple[str, Opti
 
     # For longform models, check backend availability
     if profile.family == "longform":
+        if not _has_text(request.input) and not _has_speakers(request.speakers):
+            return model_key, JSONResponse(
+                status_code=400,
+                content={
+                    "error": {
+                        "message": (
+                            f"Model '{model_key}' requires either 'input' or "
+                            "'speakers'."
+                        ),
+                        "type": "invalid_request",
+                    }
+                },
+            )
+        if request.stream:
+            return model_key, JSONResponse(
+                status_code=400,
+                content={
+                    "error": {
+                        "message": f"Model '{model_key}' does not support streaming.",
+                        "type": "invalid_request",
+                    }
+                },
+            )
         adapter = make_adapter(model_key)
         if not adapter.is_available():
             return model_key, JSONResponse(

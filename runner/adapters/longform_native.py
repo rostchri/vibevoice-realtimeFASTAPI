@@ -10,7 +10,7 @@ When a real long-form inference backend is wired in, replace the TODO stubs in
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from runner.adapters.base import EngineAdapter
 from runner.errors import BackendUnavailableError, CapabilityError
@@ -20,6 +20,8 @@ from runner.types import SpeechRequest
 
 class LongformNativeAdapter(EngineAdapter):
     """Adapter for VibeVoice 1.5B / 7B long-form models."""
+
+    _backend_status_cache: ClassVar[dict[str, tuple[bool, str | None]]] = {}
 
     def __init__(self, profile: ModelProfile, **kwargs: Any) -> None:
         super().__init__(profile, **kwargs)
@@ -53,10 +55,20 @@ class LongformNativeAdapter(EngineAdapter):
             raise ImportError("No long-form backend available yet – this is expected")
         except ImportError as exc:
             self._backend_error = str(exc)
+            self._backend_status_cache[self.profile.key] = (False, self._backend_error)
             return False
 
     def _ensure_backend(self) -> None:
         """Raise :class:`BackendUnavailableError` if backend is missing."""
+        cached = self._backend_status_cache.get(self.profile.key)
+        if cached is not None:
+            available, error = cached
+            self._backend_error = error
+            if available:
+                self._backend_loaded = True
+                return
+            raise BackendUnavailableError(self.profile.key, detail=self._backend_error)
+
         if not self._backend_loaded:
             if not self._load_backend():
                 raise BackendUnavailableError(
@@ -64,6 +76,7 @@ class LongformNativeAdapter(EngineAdapter):
                     detail=self._backend_error,
                 )
             self._backend_loaded = True
+            self._backend_status_cache[self.profile.key] = (True, None)
 
     # ------------------------------------------------------------------
     # EngineAdapter interface

@@ -18,8 +18,6 @@ import os
 import sys
 from pathlib import Path
 
-from huggingface_hub import snapshot_download
-
 # Ensure project root is on sys.path so ``runner`` is importable.
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
@@ -93,6 +91,8 @@ def main() -> None:
             return
 
     try:
+        from huggingface_hub import snapshot_download
+
         snapshot_download(
             repo_id=model_id,
             local_dir=str(local_dir),
