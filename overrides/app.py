@@ -832,7 +832,6 @@ class OpenAISpeechRequest(BaseModel):
     # requests; family-specific validation below rejects blank input where needed.
     input: Optional[str] = Field(
         None,
-        min_length=1,
         max_length=MAX_INPUT_LENGTH,
         description=(
             "Required for realtime models. Optional for longform models when "
@@ -847,7 +846,7 @@ class OpenAISpeechRequest(BaseModel):
     stream: bool = False
 
 
-def _has_non_whitespace_text(value: Optional[str]) -> bool:
+def _has_text_content(value: Optional[str]) -> bool:
     return value is not None and value.strip() != ""
 
 
@@ -882,7 +881,7 @@ def _resolve_and_validate_model(request: OpenAISpeechRequest) -> Tuple[str, Opti
 
     profile = get_model_profile(model_key)
 
-    if profile.family == "realtime" and not _has_non_whitespace_text(request.input):
+    if profile.family == "realtime" and not _has_text_content(request.input):
         return model_key, _invalid_request(
             f"Model '{model_key}' requires a non-empty 'input' field."
         )
@@ -896,7 +895,7 @@ def _resolve_and_validate_model(request: OpenAISpeechRequest) -> Tuple[str, Opti
 
     # For longform models, check backend availability
     if profile.family == "longform":
-        if not _has_non_whitespace_text(request.input) and not _has_speakers(request.speakers):
+        if not _has_text_content(request.input) and not _has_speakers(request.speakers):
             return model_key, _invalid_request(
                 f"Model '{model_key}' requires either a non-empty "
                 "'input' field or at least one speaker."
