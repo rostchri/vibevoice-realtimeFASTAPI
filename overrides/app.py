@@ -828,6 +828,8 @@ async def websocket_stream(ws: WebSocket) -> None:
 
 class OpenAISpeechRequest(BaseModel):
     model: str = "tts-1"
+    # Optional at the schema level so longform models can accept speakers-only
+    # requests; family-specific validation below rejects blank input where needed.
     input: Optional[str] = Field(None, max_length=MAX_INPUT_LENGTH)
     voice: Optional[str] = None
     response_format: Optional[str] = Field("opus", pattern=r"^(opus|wav|mp3)$")
@@ -843,6 +845,13 @@ def _has_non_whitespace_text(value: Optional[str]) -> bool:
 
 def _has_speakers(value: Optional[list]) -> bool:
     return value is not None and len(value) > 0
+
+
+def _invalid_request(message: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=400,
+        content={"error": {"message": message, "type": "invalid_request"}},
+    )
 
 
 def _resolve_and_validate_model(request: OpenAISpeechRequest) -> Tuple[str, Optional[JSONResponse]]:
@@ -866,55 +875,27 @@ def _resolve_and_validate_model(request: OpenAISpeechRequest) -> Tuple[str, Opti
     profile = get_model_profile(model_key)
 
     if profile.family == "realtime" and not _has_non_whitespace_text(request.input):
-        return model_key, JSONResponse(
-            status_code=400,
-            content={
-                "error": {
-                    "message": f"Model '{model_key}' requires a non-empty 'input' field.",
-                    "type": "invalid_request",
-                }
-            },
+        return model_key, _invalid_request(
+            f"Model '{model_key}' requires a non-empty 'input' field."
         )
 
     # Reject speakers for realtime models
     if profile.family == "realtime" and _has_speakers(request.speakers):
-        return model_key, JSONResponse(
-            status_code=400,
-            content={
-                "error": {
-                    "message": (
-                        f"Model '{model_key}' does not support the 'speakers' field. "
-                        "Use a longform model (tts-1.5b, tts-7b) for multi-speaker dialogue."
-                    ),
-                    "type": "invalid_request",
-                }
-            },
+        return model_key, _invalid_request(
+            f"Model '{model_key}' does not support the 'speakers' field. "
+            "Use a longform model (tts-1.5b, tts-7b) for multi-speaker dialogue."
         )
 
     # For longform models, check backend availability
     if profile.family == "longform":
         if not _has_non_whitespace_text(request.input) and not _has_speakers(request.speakers):
-            return model_key, JSONResponse(
-                status_code=400,
-                content={
-                    "error": {
-                        "message": (
-                            f"Model '{model_key}' requires either a non-empty "
-                            "'input' field or at least one speaker turn."
-                        ),
-                        "type": "invalid_request",
-                    }
-                },
+            return model_key, _invalid_request(
+                f"Model '{model_key}' requires either a non-empty "
+                "'input' field or at least one speaker turn."
             )
         if request.stream:
-            return model_key, JSONResponse(
-                status_code=400,
-                content={
-                    "error": {
-                        "message": f"Model '{model_key}' does not support streaming.",
-                        "type": "invalid_request",
-                    }
-                },
+            return model_key, _invalid_request(
+                f"Model '{model_key}' does not support streaming."
             )
         adapter = make_adapter(model_key)
         if not adapter.is_available():

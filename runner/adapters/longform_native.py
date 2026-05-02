@@ -63,13 +63,13 @@ class LongformNativeAdapter(EngineAdapter):
         """Raise :class:`BackendUnavailableError` if backend is missing."""
         with self._backend_status_cache_lock:
             cached = self._backend_status_cache.get(self.profile.key)
-        if cached is not None:
-            available, error = cached
-            self._backend_error = error
-            if available:
-                self._backend_loaded = True
-                return
-            raise BackendUnavailableError(self.profile.key, detail=self._backend_error)
+            if cached is not None:
+                available, error = cached
+                self._backend_error = error
+                if available:
+                    self._backend_loaded = True
+                    return
+                raise BackendUnavailableError(self.profile.key, detail=self._backend_error)
 
         if self._backend_loaded:
             return
