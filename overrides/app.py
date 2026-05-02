@@ -837,7 +837,7 @@ class OpenAISpeechRequest(BaseModel):
     stream: bool = False
 
 
-def _has_text(value: Optional[str]) -> bool:
+def _has_non_whitespace_text(value: Optional[str]) -> bool:
     return value is not None and value.strip() != ""
 
 
@@ -865,7 +865,7 @@ def _resolve_and_validate_model(request: OpenAISpeechRequest) -> Tuple[str, Opti
 
     profile = get_model_profile(model_key)
 
-    if profile.family == "realtime" and not _has_text(request.input):
+    if profile.family == "realtime" and not _has_non_whitespace_text(request.input):
         return model_key, JSONResponse(
             status_code=400,
             content={
@@ -893,7 +893,7 @@ def _resolve_and_validate_model(request: OpenAISpeechRequest) -> Tuple[str, Opti
 
     # For longform models, check backend availability
     if profile.family == "longform":
-        if not _has_text(request.input) and not _has_speakers(request.speakers):
+        if not _has_non_whitespace_text(request.input) and not _has_speakers(request.speakers):
             return model_key, JSONResponse(
                 status_code=400,
                 content={
