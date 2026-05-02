@@ -39,7 +39,7 @@ from .text_processing import normalize_text, split_text_into_sentences
 # package so both local overrides/ and vendored demo/web/ copies work.
 _APP_DIR = Path(__file__).resolve().parent
 for _possible_root in (_APP_DIR, *_APP_DIR.parents):
-    if (_possible_root / "runner" / "model_registry.py").is_file():
+    if (_possible_root / "runner" / "__init__.py").is_file():
         if str(_possible_root) not in sys.path:
             sys.path.insert(0, str(_possible_root))
         break
@@ -830,7 +830,15 @@ class OpenAISpeechRequest(BaseModel):
     model: str = "tts-1"
     # Optional at the schema level so longform models can accept speakers-only
     # requests; family-specific validation below rejects blank input where needed.
-    input: Optional[str] = Field(None, min_length=1, max_length=MAX_INPUT_LENGTH)
+    input: Optional[str] = Field(
+        None,
+        min_length=1,
+        max_length=MAX_INPUT_LENGTH,
+        description=(
+            "Required for realtime models. Optional for longform models when "
+            "'speakers' is provided."
+        ),
+    )
     voice: Optional[str] = None
     response_format: Optional[str] = Field("opus", pattern=r"^(opus|wav|mp3)$")
     speed: Optional[float] = 1.0
@@ -891,7 +899,7 @@ def _resolve_and_validate_model(request: OpenAISpeechRequest) -> Tuple[str, Opti
         if not _has_non_whitespace_text(request.input) and not _has_speakers(request.speakers):
             return model_key, _invalid_request(
                 f"Model '{model_key}' requires either a non-empty "
-                "'input' field or at least one speaker turn."
+                "'input' field or at least one speaker."
             )
         if request.stream:
             return model_key, _invalid_request(

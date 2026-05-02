@@ -76,10 +76,8 @@ class LongformNativeAdapter(EngineAdapter):
 
             available = self._load_backend()
             backend_error = self._backend_error
-            self._backend_status_cache[self.profile.key] = (
-                available,
-                None if available else backend_error,
-            )
+            error_value = None if available else backend_error
+            self._backend_status_cache[self.profile.key] = (available, error_value)
 
             if not available:
                 raise BackendUnavailableError(
