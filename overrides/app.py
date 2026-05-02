@@ -870,7 +870,7 @@ def _resolve_and_validate_model(request: OpenAISpeechRequest) -> Tuple[str, Opti
             status_code=400,
             content={
                 "error": {
-                    "message": f"Model '{model_key}' requires the 'input' field.",
+                    "message": f"Model '{model_key}' requires a non-empty 'input' field.",
                     "type": "invalid_request",
                 }
             },
@@ -899,8 +899,8 @@ def _resolve_and_validate_model(request: OpenAISpeechRequest) -> Tuple[str, Opti
                 content={
                     "error": {
                         "message": (
-                            f"Model '{model_key}' requires either 'input' or "
-                            "'speakers'."
+                            f"Model '{model_key}' requires either a non-empty "
+                            "'input' field or at least one speaker turn."
                         ),
                         "type": "invalid_request",
                     }
