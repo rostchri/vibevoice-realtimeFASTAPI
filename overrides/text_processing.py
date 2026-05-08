@@ -3,6 +3,7 @@ Text processing logic ported from Kokoro-FastAPI.
 Includes text normalization and sentence splitting.
 """
 
+import functools
 import math
 import re
 from typing import List
@@ -339,6 +340,7 @@ def handle_time(t: re.Match[str]) -> str:
 
 
 # Main Functions
+@functools.lru_cache(maxsize=512)
 def normalize_text(text: str) -> str:
     """Normalize text for TTS processing using Kokoro logic"""
     # Email

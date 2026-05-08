@@ -1,4 +1,5 @@
 import asyncio
+import concurrent.futures
 import copy
 import datetime
 import io
@@ -64,6 +65,12 @@ SAMPLE_RATE = 24_000
 UPSAMPLED_RATE = 48_000
 DEFAULT_TEMPERATURE = 0.9
 MAX_INPUT_LENGTH = 100_000
+
+# Configurable concurrency limit (default 2 for single-GPU setups)
+MAX_CONCURRENT_REQUESTS = int(os.environ.get("MAX_CONCURRENT_REQUESTS", "2"))
+
+# Thread pool for CPU-bound text processing
+_TEXT_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="text_proc")
 
 
 def get_timestamp():
@@ -252,7 +259,7 @@ class StreamingTTSService:
 
         self.inference_steps = steps
 
-    def warmup(self, text: str = "Warmup run.") -> None:
+    def warmup(self, text: str = "Hola, bienvenido al servicio de síntesis de voz.") -> None:
         if self.processor is None or self.model is None:
             print("[startup] Warmup skipped: service not initialized")
             return
@@ -314,9 +321,10 @@ class StreamingTTSService:
         if name and name in self.voice_presets:
             return name
 
-        default_key = "en-WHTest_man"
-        if default_key in self.voice_presets:
-            return default_key
+        # Prefer Spanish voices when VOICE_PRESET env selects one
+        for preferred in ["sp-Spk0_woman", "sp-Spk1_man", "en-WHTest_man"]:
+            if preferred in self.voice_presets:
+                return preferred
 
         first_key = next(iter(self.voice_presets))
         print(f"[startup] Using fallback voice preset: {first_key}")
@@ -484,23 +492,40 @@ class StreamingTTSService:
         # Global stop signal for the entire request
         stop_signal = stop_event or threading.Event()
 
-        # 3. Stream each sentence sequentially
-        for sentence in sentences:
+        # --- Sentence pipelining: prefetch inputs for the next sentence
+        # while we are streaming the current one to hide _prepare_inputs latency.
+        def _prepare_inputs_safe(sentence: str):
+            """Wrapper that returns (inputs, error) so callers can check."""
+            try:
+                return self._prepare_inputs(sentence, prefilled_outputs), None
+            except Exception as exc:
+                return None, exc
+
+        # Kick off input preparation for the first sentence immediately.
+        futures: list = []
+        for s in sentences:
+            futures.append(_TEXT_EXECUTOR.submit(_prepare_inputs_safe, s))
+
+        # 3. Stream each sentence, inputs already being prepared in background
+        for idx, sentence in enumerate(sentences):
             if stop_signal.is_set():
                 break
 
             print(f"[Streaming] Processing sentence: {sentence[:50]}...")
 
-            inputs = self._prepare_inputs(sentence, prefilled_outputs)
+            # Wait for this sentence's inputs (usually already done)
+            inputs, prep_err = futures[idx].result()
+            if prep_err is not None:
+                raise prep_err
+
             audio_streamer = AudioStreamer(batch_size=1, stop_signal=None, timeout=None)
             errors: list = []
 
-            # Create a dedicated worker logic for this sentence
-            def _worker():
+            def _worker(inp=inputs, streamer=audio_streamer, errs=errors):
                 self._run_generation(
-                    inputs=inputs,
-                    audio_streamer=audio_streamer,
-                    errors=errors,
+                    inputs=inp,
+                    audio_streamer=streamer,
+                    errors=errs,
                     cfg_scale=cfg_scale,
                     do_sample=do_sample,
                     temperature=temperature,
@@ -565,9 +590,6 @@ class StreamingTTSService:
                 thread.join(timeout=30)
 
                 if errors:
-                    # Decide if we want to stop strictly on error or continue to next sentence
-                    # For now, let's log and maybe continue? Or stop?
-                    # The original code raised logic, let's stop.
                     raise errors[0]
 
     def get_output_sample_rate(self) -> int:
@@ -642,7 +664,7 @@ async def _startup() -> None:
     app.state.model_path = model_path
     app.state.device = device
     app.state.lazy_load_enabled = enable_lazy_load
-    app.state.websocket_lock = asyncio.Lock()
+    app.state.generation_semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
     app.state.service_init_lock = asyncio.Lock()
     app.state.active_model_key = os.environ.get("ACTIVE_MODEL_KEY", "realtime-0.5b")
 
@@ -715,9 +737,9 @@ async def websocket_stream(ws: WebSocket) -> None:
     temperature, do_sample = parse_temperature(temp_param)
 
     service = await ensure_service_loaded()
-    lock: asyncio.Lock = app.state.websocket_lock
+    semaphore: asyncio.Semaphore = app.state.generation_semaphore
 
-    if lock.locked():
+    if semaphore._value == 0:
         busy_message = {
             "type": "log",
             "event": "backend_busy",
@@ -734,7 +756,7 @@ async def websocket_stream(ws: WebSocket) -> None:
 
     acquired = False
     try:
-        await lock.acquire()
+        await semaphore.acquire()
         acquired = True
 
         log_queue: "Queue[Dict[str, Any]]" = Queue()
@@ -823,7 +845,7 @@ async def websocket_stream(ws: WebSocket) -> None:
             print("WS handler exit")
     finally:
         if acquired:
-            lock.release()
+            semaphore.release()
 
 
 class OpenAISpeechRequest(BaseModel):
@@ -930,9 +952,9 @@ async def openai_speech(request: OpenAISpeechRequest):
         return error_resp
 
     service = await ensure_service_loaded()
-    lock: asyncio.Lock = app.state.websocket_lock
+    semaphore: asyncio.Semaphore = app.state.generation_semaphore
 
-    async with lock:
+    async with semaphore:
         # Determine voice and sampling controls
         voice_key = request.voice
         temperature, do_sample = parse_temperature(request.temp)
