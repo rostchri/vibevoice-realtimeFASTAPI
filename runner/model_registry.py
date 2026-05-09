@@ -50,7 +50,7 @@ _PROFILES: dict[str, ModelProfile] = {
     ),
     "tts-7b": ModelProfile(
         key="tts-7b",
-        hf_model_id=os.environ.get("VIBEVOICE_7B_MODEL_ID", "microsoft/VibeVoice-7B"),
+        hf_model_id=os.environ.get("VIBEVOICE_7B_MODEL_ID", "vibevoice/VibeVoice-7B"),
         default_local_dir="models/VibeVoice-7B",
         family="longform",
         loader_mode="native_longform",
