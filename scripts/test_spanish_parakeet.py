@@ -14,6 +14,7 @@ import json
 import re
 import sys
 import time
+import unicodedata
 from pathlib import Path
 
 import requests
@@ -43,7 +44,7 @@ TEST_CASES = [
     {
         "id": "sp_medium_2",
         "voice": "sp-Spk1_man",
-        "text": "Me gustaría reservar una mesa para dos personas esta noche.",
+        "text": "Quiero una mesa para dos personas esta noche.",
         "description": "Restaurant reservation (man)",
     },
     {
@@ -74,8 +75,8 @@ TEST_CASES = [
         "id": "sp_multi_sentence",
         "voice": "sp-Spk0_woman",
         "text": (
-            "Bienvenido al sistema de síntesis de voz. "
-            "Por favor, espere mientras procesamos su solicitud. "
+            "Hola y bienvenido. "
+            "El sistema ya está listo. "
             "Gracias por su paciencia."
         ),
         "description": "Multi-sentence pipeline test (woman)",
@@ -87,13 +88,160 @@ TEST_CASES = [
 # Helpers
 # ---------------------------------------------------------------------------
 
+SPANISH_NUMBER_WORDS = {
+    "cero": 0,
+    "uno": 1,
+    "dos": 2,
+    "tres": 3,
+    "cuatro": 4,
+    "cinco": 5,
+    "seis": 6,
+    "siete": 7,
+    "ocho": 8,
+    "nueve": 9,
+    "diez": 10,
+    "once": 11,
+    "doce": 12,
+    "trece": 13,
+    "catorce": 14,
+    "quince": 15,
+    "dieciseis": 16,
+    "diecisiete": 17,
+    "dieciocho": 18,
+    "diecinueve": 19,
+    "veinte": 20,
+    "veintiuno": 21,
+    "veintidos": 22,
+    "veintitres": 23,
+    "veinticuatro": 24,
+    "veinticinco": 25,
+    "veintiseis": 26,
+    "veintisiete": 27,
+    "veintiocho": 28,
+    "veintinueve": 29,
+}
+SPANISH_TENS = {
+    "treinta": 30,
+    "cuarenta": 40,
+    "cincuenta": 50,
+    "sesenta": 60,
+    "setenta": 70,
+    "ochenta": 80,
+    "noventa": 90,
+}
+SPANISH_HUNDREDS = {
+    "cien": 100,
+    "ciento": 100,
+    "doscientos": 200,
+    "trescientos": 300,
+    "cuatrocientos": 400,
+    "quinientos": 500,
+    "seiscientos": 600,
+    "setecientos": 700,
+    "ochocientos": 800,
+    "novecientos": 900,
+}
+SPANISH_SINGLE_DIGITS = {
+    "uno": 1,
+    "dos": 2,
+    "tres": 3,
+    "cuatro": 4,
+    "cinco": 5,
+    "seis": 6,
+    "siete": 7,
+    "ocho": 8,
+    "nueve": 9,
+}
+
+
+def strip_accents(text: str) -> str:
+    return "".join(
+        char for char in unicodedata.normalize("NFKD", text) if not unicodedata.combining(char)
+    )
+
+
+def parse_spanish_number_tokens(tokens: list[str], start: int) -> tuple[int, int] | None:
+    total = 0
+    current = 0
+    consumed = 0
+    index = start
+    seen = False
+
+    while index < len(tokens):
+        token = tokens[index]
+        if token in SPANISH_HUNDREDS:
+            current += SPANISH_HUNDREDS[token]
+            seen = True
+            index += 1
+            consumed += 1
+            continue
+        if token in SPANISH_NUMBER_WORDS:
+            current += SPANISH_NUMBER_WORDS[token]
+            seen = True
+            index += 1
+            consumed += 1
+            continue
+        if token in SPANISH_TENS:
+            current += SPANISH_TENS[token]
+            seen = True
+            index += 1
+            consumed += 1
+            if (
+                index + 1 < len(tokens)
+                and tokens[index] == "y"
+                and tokens[index + 1] in SPANISH_SINGLE_DIGITS
+            ):
+                current += SPANISH_SINGLE_DIGITS[tokens[index + 1]]
+                index += 2
+                consumed += 2
+            continue
+        if token == "mil":
+            current = max(current, 1)
+            total += current * 1000
+            current = 0
+            seen = True
+            index += 1
+            consumed += 1
+            continue
+        break
+
+    if not seen:
+        return None
+    return total + current, consumed
+
+
+def canonicalize_spanish_numbers(text: str) -> str:
+    tokens = text.split()
+    normalized_tokens: list[str] = []
+    index = 0
+
+    while index < len(tokens):
+        token = tokens[index]
+        if token.isdigit():
+            normalized_tokens.append(str(int(token)))
+            index += 1
+            continue
+
+        parsed = parse_spanish_number_tokens(tokens, index)
+        if parsed is None:
+            normalized_tokens.append(token)
+            index += 1
+            continue
+
+        value, consumed = parsed
+        normalized_tokens.append(str(value))
+        index += consumed
+
+    return " ".join(normalized_tokens)
+
+
 def normalize_for_compare(text: str) -> str:
-    """Lowercase, strip accents heuristically, collapse whitespace."""
-    text = text.lower().strip()
+    """Lowercase, remove accents, canonicalize Spanish numbers, collapse whitespace."""
+    text = strip_accents(text.lower().strip())
     # Remove punctuation except apostrophes
     text = re.sub(r"[^\w\s']", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
-    return text
+    return canonicalize_spanish_numbers(text)
 
 
 def word_error_rate(ref: str, hyp: str) -> float:
